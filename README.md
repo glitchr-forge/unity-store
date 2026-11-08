@@ -1,6 +1,6 @@
-# Glitch Art Hub
+# Forge Store
 
-A window of the Unity editor - **Window > Glitch Art Hub** - that browses
+A window of the Unity editor - **Window > Forge Store** - that browses
 package hubs and installs their packages in the open project in one click:
 
 - **Packages.** Every source's packages, with search, versions and
@@ -35,11 +35,11 @@ From Glitch Art's registry, in `Packages/manifest.json`:
   {"name": "Glitch Art", "url": "https://glitchr.io/upm", "scopes": ["io.glitchr"]}
 ],
 "dependencies": {
-  "io.glitchr.hub": "1.0.0"
+  "io.glitchr.store": "1.0.0"
 }
 ```
 
-Or from Git: `"io.glitchr.hub": "https://github.com/glitchr-studio/unity-hub.git#1.0.0"`.
+Or from Git: `"io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#1.0.0"`.
 
 See [docs/sources.md](docs/sources.md) for the hub manifest and the kinds of
 source, [docs/buying.md](docs/buying.md) for the device flow.

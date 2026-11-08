@@ -1,8 +1,8 @@
 {
-    "name": "Glitchr.Hub.Editor.Tests",
-    "rootNamespace": "Glitchr.Hub.Tests",
+    "name": "Glitchr.Store.Editor.Tests",
+    "rootNamespace": "Glitchr.Store.Tests",
     "references": [
-        "Glitchr.Hub.Editor",
+        "Glitchr.Store.Editor",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

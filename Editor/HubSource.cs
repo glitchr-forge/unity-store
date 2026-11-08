@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
 
-namespace Glitchr.Hub
+namespace Glitchr.Store
 {
     /// <summary>
     /// A place packages come from: a hub manifest (a forge's /upm/-/hub.json, a static hub's
@@ -31,7 +31,7 @@ namespace Glitchr.Hub
     public static class HubSources
     {
         public const string GlitchArt = "https://glitchr.io/upm/-/hub.json";
-        private const string Key = "Glitchr.Hub.Sources";
+        private const string Key = "Glitchr.Store.Sources";
 
         [Serializable]
         private sealed class Saved

@@ -1,12 +1,12 @@
 {
-  "name": "io.glitchr.hub",
+  "name": "io.glitchr.store",
   "version": "1.0.0",
-  "displayName": "Glitch Art Hub",
+  "displayName": "Forge Store",
   "description": "A window of the Unity editor that browses package hubs - a forge, a static hub on GitHub Pages, any UPM registry, Git packages - and installs, updates and removes their packages in the open project in one click. A hub that sells is bought from in the browser; the key it brings is kept in the user's .upmconfig.toml.",
   "unity": "2021.3",
-  "documentationUrl": "https://github.com/glitchr-studio/unity-hub#readme",
-  "changelogUrl": "https://github.com/glitchr-studio/unity-hub/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/glitchr-studio/unity-hub/blob/main/LICENSE.md",
+  "documentationUrl": "https://github.com/glitchr-forge/unity-store#readme",
+  "changelogUrl": "https://github.com/glitchr-forge/unity-store/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/glitchr-forge/unity-store/blob/main/LICENSE.md",
   "keywords": [
     "hub",
     "packages",

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using NUnit.Framework;
 
-namespace Glitchr.Hub.Tests
+namespace Glitchr.Store.Tests
 {
     /// <summary>What the window writes: a project's manifest, the user's Package Manager configuration - and the JSON it reads.</summary>
     public class HubTests

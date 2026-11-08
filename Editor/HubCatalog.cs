@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
 
-namespace Glitchr.Hub
+namespace Glitchr.Store
 {
     /// <summary>A package a source offers, and how to install it.</summary>
     public sealed class HubItem

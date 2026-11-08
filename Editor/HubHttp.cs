@@ -4,7 +4,7 @@ using System.Text;
 using System.Threading.Tasks;
 using UnityEngine.Networking;
 
-namespace Glitchr.Hub
+namespace Glitchr.Store
 {
     /// <summary>
     /// The hub's requests (UnityWebRequest, awaited): JSON in and out, a Bearer token for a

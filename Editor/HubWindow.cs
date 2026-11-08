@@ -4,10 +4,10 @@ using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
-namespace Glitchr.Hub
+namespace Glitchr.Store
 {
     /// <summary>
-    /// Window > Glitch Art Hub: the sources' packages (search, versions and changelogs), installed,
+    /// Window > Forge Store: the sources' packages (search, versions and changelogs), installed,
     /// updated and removed in the open project in one click; the hubs' games (played in the browser
     /// when free, downloaded once bought); the sources, added on the fly - a hub manifest, a UPM
     /// registry, a Git URL. "Buy" appears only for a source whose hub sells (its manifest's
@@ -34,8 +34,8 @@ namespace Glitchr.Hub
         private string newScopes = string.Empty;
         private string newCertificate = string.Empty;
 
-        [MenuItem("Window/Glitch Art Hub")]
-        public static void Open() => GetWindow<HubWindow>("Hub").Show();
+        [MenuItem("Window/Forge Store")]
+        public static void Open() => GetWindow<HubWindow>("Forge Store").Show();
 
         private void OnEnable()
         {
@@ -53,7 +53,7 @@ namespace Glitchr.Hub
             {
                 catalog = await HubCatalogReader.Read(HubSources.All());
                 installed = await HubInstaller.Installed();
-                titleContent = new GUIContent(catalog.Brand ?? "Hub");
+                titleContent = new GUIContent(catalog.Brand ?? "Forge Store");
                 status = catalog.Errors.Count > 0 ? string.Join("\n", catalog.Errors) : null;
             }
             catch (Exception e)

@@ -1,6 +1,6 @@
 {
-    "name": "Glitchr.Hub.Editor",
-    "rootNamespace": "Glitchr.Hub",
+    "name": "Glitchr.Store.Editor",
+    "rootNamespace": "Glitchr.Store",
     "references": [],
     "includePlatforms": [
         "Editor"

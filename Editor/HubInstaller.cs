@@ -6,7 +6,7 @@ using UnityEditor;
 using UnityEditor.PackageManager;
 using UnityEditor.PackageManager.Requests;
 
-namespace Glitchr.Hub
+namespace Glitchr.Store
 {
     /// <summary>
     /// Installs, updates and removes in the open project: a registry package through its scoped

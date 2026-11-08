@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Window > Glitch Art Hub: the sources' packages - search, versions and
+- Window > Forge Store: the sources' packages - search, versions and
   changelogs -, installed, updated and removed in the open project in one
   click; the hubs' games, played in the browser when free, downloaded once
   bought; the sources, added on the fly: a hub manifest, a UPM registry with

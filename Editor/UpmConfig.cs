@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace Glitchr.Hub
+namespace Glitchr.Store
 {
     /// <summary>
     /// The user's Package Manager configuration (~/.upmconfig.toml, %USERPROFILE%\.upmconfig.toml on

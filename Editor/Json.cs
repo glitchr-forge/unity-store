@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
-namespace Glitchr.Hub
+namespace Glitchr.Store
 {
     /// <summary>
     /// A small JSON reader and writer: objects as <see cref="Dictionary{TKey,TValue}"/>, arrays as
