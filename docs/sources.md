@@ -32,6 +32,30 @@ A JSON document that names a hub and its sources - what a forge serves at
 - `checkout`, when present, lets the window offer to buy (see
   [buying.md](buying.md)).
 
+### Or in a package's `package.json`
+
+The same document can live in a package, under a `"hub"` key - Unity's
+Package Manager ignores keys it does not know. A tag of the package then
+freezes the list; `io.glitchr.studio` is Glitch Art's:
+
+```json
+{
+  "name": "io.glitchr.studio",
+  "version": "0.2.0",
+  "dependencies": {},
+  "hub": {
+    "version": 1,
+    "name": "Glitch Art",
+    "sources": [
+      {"name": "Glitch Art Toolkit", "type": "git", "url": "https://github.com/glitchr-studio/unity-toolkit.git#v0.3.0"}
+    ]
+  }
+}
+```
+
+Add it as a Git package (`https://github.com/glitchr-studio/unity-studio.git#v0.2.0`)
+or as a hub, by the URL of its `package.json` or of its repository.
+
 ## A UPM registry
 
 Its URL and its scopes (`com.example`): any npm registry Unity's Package
@@ -43,6 +67,11 @@ package writes the registry, with these scopes, into the project's
 
 Its URL, as Unity's Package Manager takes it: `https://...git`, with
 `#<tag>` or `?path=<folder>` when needed.
+
+On GitHub, the window reads the package's `package.json` at that tag and
+in that folder: its name (so it shows as installed), version and
+description - and its `"hub"` section, when it has one, whose sources
+are listed too. A package elsewhere, or private, is listed as given.
 
 ## A development site
 

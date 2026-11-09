@@ -38,6 +38,31 @@ namespace Glitchr.Store.Tests
         }
 
         [Test]
+        public void APackageWithAHubSectionIsReadAsItsHub()
+        {
+            object package = Json.Parse("{\"name\":\"io.glitchr.studio\",\"version\":\"0.2.0\",\"dependencies\":{},\"hub\":{\"name\":\"Glitch Art\",\"sources\":[{\"type\":\"git\",\"url\":\"https://github.com/glitchr-studio/unity-toolkit.git#v0.3.0\"}]}}");
+            object hub = HubCatalogReader.HubOf(package);
+            Assert.AreEqual("Glitch Art", Json.Get(hub, "name"), "the section, not the package's own name");
+            Assert.AreEqual(1, Json.Array(Json.Get(hub, "sources")).Count);
+
+            object plain = Json.Parse("{\"version\":1,\"name\":\"Glitch Art\",\"sources\":[]}");
+            Assert.AreSame(plain, HubCatalogReader.HubOf(plain), "a hub.json is its own hub");
+        }
+
+        [Test]
+        public void AGitHubPackagesPackageJsonIsFoundAtItsReferenceAndFolder()
+        {
+            const string raw = "https://raw.githubusercontent.com/";
+            Assert.AreEqual(raw + "glitchr-studio/unity-toolkit/v0.3.0/package.json", HubCatalogReader.PackageJsonUrl("https://github.com/glitchr-studio/unity-toolkit.git#v0.3.0"));
+            Assert.AreEqual(raw + "glitchr-forge/unity-store/HEAD/package.json", HubCatalogReader.PackageJsonUrl("https://github.com/glitchr-forge/unity-store.git"));
+            Assert.AreEqual(raw + "meiyasan/unity-mcp/v10.3.0-glitchr.5/MCPForUnity/package.json", HubCatalogReader.PackageJsonUrl("https://github.com/meiyasan/unity-mcp.git?path=/MCPForUnity#v10.3.0-glitchr.5"));
+            Assert.AreEqual(raw + "someone/tool/main/package.json", HubCatalogReader.PackageJsonUrl("git@github.com:someone/tool.git#main"));
+            Assert.IsNull(HubCatalogReader.PackageJsonUrl("https://glitchr-studio.github.io/hub.json"), "not a repository");
+            Assert.IsNull(HubCatalogReader.PackageJsonUrl("https://github.com/someone/tool/blob/main/hub.json"), "a page, not a repository");
+            Assert.IsNull(HubCatalogReader.PackageJsonUrl("https://gitlab.com/someone/tool.git"), "GitHub's only");
+        }
+
+        [Test]
         public void TheManifestGetsTheScopedRegistryOnceAndTheDependency()
         {
             string path = Path.Combine(directory, "manifest.json");

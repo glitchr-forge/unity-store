@@ -19,7 +19,7 @@ namespace Glitchr.Store
             public string Text;
             public string Error;
             public bool Ok => Status >= 200 && Status < 300;
-            public object Json => string.IsNullOrEmpty(Text) ? null : Hub.Json.Parse(Text);
+            public object Json => string.IsNullOrEmpty(Text) ? null : global::Glitchr.Store.Json.Parse(Text);
         }
 
         public static Task<Answer> Get(string url, string token = null, string certificate = null)
@@ -31,7 +31,7 @@ namespace Glitchr.Store
         {
             var request = new UnityWebRequest(url, UnityWebRequest.kHttpVerbPOST)
             {
-                uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(Hub.Json.Write(body))),
+                uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(global::Glitchr.Store.Json.Write(body))),
                 downloadHandler = new DownloadHandlerBuffer(),
             };
             request.SetRequestHeader("Content-Type", "application/json");

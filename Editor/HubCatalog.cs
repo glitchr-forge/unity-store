@@ -89,7 +89,8 @@ namespace Glitchr.Store
                             await ReadRegistry(origin, null, result);
                             break;
                         case HubSource.Git:
-                            result.Items.Add(new HubItem { Name = GitName(source.Url), DisplayName = source.Label, Description = source.Url, GitUrl = source.Url, Origin = new HubOrigin { Source = source, HubName = source.Label } });
+                            object hub = await ReadGit(source.Url, source.Name, new HubOrigin { Source = source, HubName = source.Label }, result);
+                            if (hub != null) await ReadHub(hub, source, result);
                             break;
                     }
                 }
@@ -104,9 +105,78 @@ namespace Glitchr.Store
 
         private static async Task ReadManifest(HubSource source, HubCatalogResult result)
         {
-            HubHttp.Answer answer = await HubHttp.Get(source.Url, null, source.CertificateSha256);
+            HubHttp.Answer answer = await HubHttp.Get(PackageJsonUrl(source.Url) ?? source.Url, null, source.CertificateSha256);
             if (!answer.Ok) throw new Exception(answer.Error ?? ("HTTP " + answer.Status));
-            object manifest = answer.Json;
+            await ReadHub(HubOf(answer.Json), source, result);
+        }
+
+        /// <summary>
+        /// A hub's own document: a hub.json, or the "hub" section of a package's package.json (a
+        /// package that lists the packages it goes with, as io.glitchr.studio does). Unity ignores
+        /// the section; the window reads it.
+        /// </summary>
+        public static object HubOf(object json)
+        {
+            object hub = Json.Get(json, "hub");
+
+            return Json.Object(hub) != null ? hub : json;
+        }
+
+        /// <summary>
+        /// Where a Git package's package.json is served, for a GitHub repository: at the URL's
+        /// #reference (the default branch without one) and in its ?path= folder. Null for any other
+        /// address.
+        /// </summary>
+        public static string PackageJsonUrl(string gitUrl)
+        {
+            if (string.IsNullOrEmpty(gitUrl)) return null;
+            string rest = gitUrl.Trim(), reference = null, folder = null;
+            int hash = rest.IndexOf('#');
+            if (hash >= 0) { reference = rest.Substring(hash + 1); rest = rest.Substring(0, hash); }
+            int path = rest.IndexOf("?path=", StringComparison.Ordinal);
+            if (path >= 0) { folder = rest.Substring(path + 6).Trim('/'); rest = rest.Substring(0, path); }
+            string repo = null;
+            foreach (string prefix in new[] { "https://github.com/", "git@github.com:", "ssh://git@github.com/", "git+https://github.com/" })
+            {
+                if (rest.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) repo = rest.Substring(prefix.Length);
+            }
+            if (repo == null) return null;
+            repo = repo.TrimEnd('/');
+            if (repo.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) repo = repo.Substring(0, repo.Length - 4);
+            if (repo.Split('/').Length != 2) return null;
+
+            return "https://raw.githubusercontent.com/" + repo + "/" + (string.IsNullOrEmpty(reference) ? "HEAD" : reference) + "/"
+                + (string.IsNullOrEmpty(folder) ? string.Empty : folder + "/") + "package.json";
+        }
+
+        /// <summary>
+        /// A Git package, described by its package.json when GitHub serves it: its package name (so
+        /// the window knows it installed), version and description. Returns the package's "hub"
+        /// section, if it has one.
+        /// </summary>
+        private static async Task<object> ReadGit(string url, string label, HubOrigin origin, HubCatalogResult result)
+        {
+            var item = new HubItem { Name = GitName(url), DisplayName = label, Description = url, GitUrl = url, Origin = origin };
+            result.Items.Add(item);
+            string raw = PackageJsonUrl(url);
+            if (raw == null) return null;
+            HubHttp.Answer answer = await HubHttp.Get(raw);
+            object package;
+            try { package = answer.Ok ? answer.Json : null; }
+            catch (FormatException) { package = null; }
+            if (Json.Object(package) == null) return null; // private, or not a package: as it was given
+
+            item.Name = Json.String(Json.Get(package, "name")) ?? item.Name;
+            item.DisplayName = string.IsNullOrEmpty(label) ? Json.String(Json.Get(package, "displayName")) ?? url : label;
+            item.Description = Json.String(Json.Get(package, "description")) ?? url;
+            item.Version = Json.String(Json.Get(package, "version"));
+            object hub = Json.Get(package, "hub");
+
+            return Json.Object(hub) != null ? hub : null;
+        }
+
+        private static async Task ReadHub(object manifest, HubSource source, HubCatalogResult result)
+        {
             string name = Json.String(Json.Get(manifest, "name")) ?? source.Label;
             result.Brand ??= name;
             result.Color ??= Json.String(Json.Get(manifest, "color"));
@@ -123,7 +193,7 @@ namespace Glitchr.Store
                 string label = Json.String(Json.Get(entry, "name")) ?? name;
                 if (type == HubSource.Git)
                 {
-                    result.Items.Add(new HubItem { Name = GitName(url), DisplayName = label, Description = url, GitUrl = url, Origin = new HubOrigin { Source = source, HubName = name } });
+                    await ReadGit(url, label, new HubOrigin { Source = source, HubName = name }, result);
                     continue;
                 }
                 var origin = new HubOrigin
