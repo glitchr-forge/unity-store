@@ -28,7 +28,9 @@ A JSON document that names a hub and its sources - what a forge serves at
   covers them.
 - A `upm` source without one is read as any registry: its search
   (`/-/v1/search?text=<scope>`), then each package's document.
-- A `git` source is one package, installed by its URL.
+- A `git` source is one package, installed by its URL. `"package"` may name it
+  (`io.glitchr.toolkit`); `"install": true` marks it as one every project of
+  the team gets - Forge Hub's Prepare writes those into a project at once.
 - `checkout`, when present, lets the window offer to buy (see
   [buying.md](buying.md)).
 
