@@ -35,21 +35,69 @@ namespace Glitchr.Store
             if (!string.IsNullOrEmpty(item.GitUrl))
             {
                 await Add(GitIdentifier(item, version));
+                Record(item);
 
                 return;
             }
             var manifest = new ProjectManifest();
+            if (EnsureRegistry(manifest, item)) manifest.Save();
+            await Add(item.Name + "@" + (version ?? item.Version));
+            Record(item);
+        }
+
+        /// <summary>
+        /// Several updates at once, through one AddAndRemove: one resolve and one recompilation
+        /// instead of one per package. Unity's Package Manager resolves every dependency, as for a
+        /// single install. The registries the updates need are written into the manifest first.
+        /// </summary>
+        public static async Task Apply(IList<PackageUpdate> updates, IList<string> removals = null)
+        {
+            if ((updates == null || updates.Count == 0) && (removals == null || removals.Count == 0)) return;
+            updates ??= new List<PackageUpdate>();
+            var registryItems = updates.Where(u => u.Item != null && string.IsNullOrEmpty(u.Item.GitUrl) && u.Item.Origin?.Registry != null).ToList();
+            if (registryItems.Count > 0)
+            {
+                var manifest = new ProjectManifest();
+                bool changed = false;
+                foreach (PackageUpdate update in registryItems) changed |= EnsureRegistry(manifest, update.Item);
+                if (changed) manifest.Save();
+            }
+            AddAndRemoveRequest request = await Wait(Client.AddAndRemove(updates.Select(u => u.Identifier).ToArray(), removals?.ToArray()));
+            if (request.Status != StatusCode.Success) throw new Exception(request.Error?.message ?? "The Package Manager refused the changes.");
+            if (removals != null && removals.Count > 0)
+            {
+                var record = new InstallRecord(InstallRecord.ProjectPath);
+                foreach (string name in removals) record.Remove(name);
+                record.Save();
+            }
+        }
+
+        /// <summary>The item's registry, with a scope that covers it, in the manifest; true when the manifest changed.</summary>
+        private static bool EnsureRegistry(ProjectManifest manifest, HubItem item)
+        {
             var scopes = new List<string>(item.Origin.Scopes);
             if (!scopes.Any(s => item.Name.StartsWith(s, StringComparison.Ordinal)))
             {
                 // The package's own scope, when the source names none that covers it.
                 scopes.Add(string.Join(".", item.Name.Split('.').Take(2)));
             }
-            if (manifest.AddScopedRegistry(item.Origin.RegistryName ?? item.Origin.HubName, item.Origin.Registry, scopes))
+
+            return manifest.AddScopedRegistry(item.Origin.RegistryName ?? item.Origin.HubName, item.Origin.Registry, scopes);
+        }
+
+        /// <summary>The project's record that Forge Store installed it, and from which source; a failure to write it changes nothing else.</summary>
+        private static void Record(HubItem item)
+        {
+            try
             {
-                manifest.Save();
+                var record = new InstallRecord(InstallRecord.ProjectPath);
+                record.Set(item.Name, item.Origin?.Source);
+                record.Save();
             }
-            await Add(item.Name + "@" + (version ?? item.Version));
+            catch (Exception)
+            {
+                // The package is installed; the Installed tab only loses its source's name.
+            }
         }
 
         /// <summary>The Git URL Unity's Package Manager is given: the URL, then #reference when one applies.</summary>
@@ -66,6 +114,15 @@ namespace Glitchr.Store
         {
             RemoveRequest request = await Wait(Client.Remove(name));
             if (request.Status != StatusCode.Success) throw new Exception(request.Error?.message ?? "Removal failed.");
+            try
+            {
+                var record = new InstallRecord(InstallRecord.ProjectPath);
+                if (record.Remove(name)) record.Save();
+            }
+            catch (Exception)
+            {
+                // Removed; a stale line in the record is dropped with the next removal.
+            }
         }
 
         private static async Task Add(string identifier)

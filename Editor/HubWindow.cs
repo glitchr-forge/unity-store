@@ -9,7 +9,8 @@ namespace Glitchr.Store
 {
     /// <summary>
     /// Window > Forge Store: the sources' packages (search, versions and changelogs), installed,
-    /// updated and removed in the open project in one click; the hubs' games (played in the browser
+    /// updated and removed in the open project in one click; the project's installed packages, read
+    /// from its manifest and lock (updated all at once, removed); the hubs' games (played in the browser
     /// when free, downloaded once bought); the sources, added on the fly - a hub manifest, a UPM
     /// registry, a Git URL, a GitHub owner with a repository pattern - or preset by a package of the
     /// project. "Buy" appears only for a source whose hub sells (its manifest's checkout); the key it
@@ -17,7 +18,14 @@ namespace Glitchr.Store
     /// </summary>
     public sealed class HubWindow : EditorWindow
     {
-        private enum Tab { Packages, Games, Sources }
+        private enum Tab { Packages, Installed, Games, Sources }
+
+        /// <summary>A theme's banner: drawn at this width-to-height ratio, cropped to it.</summary>
+        public const float BannerAspect = 6f;
+        public const long BannerMaxBytes = 2 * 1024 * 1024;
+        public const int BannerMaxPixels = 4096;
+        public const long LogoMaxBytes = 1024 * 1024;
+        public const int LogoMaxPixels = 1024;
 
         /// <summary>The package's former identifiers: a project that still has one is offered to remove it.</summary>
         public static readonly string[] FormerNames = { "io.glitchr.hub", "com.glitchr.hub" };
@@ -47,8 +55,14 @@ namespace Glitchr.Store
         private string newPattern = "unity-*";
         private string pastedToken = string.Empty;
 
-        private string logoUrl;
-        private Texture2D logo;
+        private ThemeImage logo;
+        private ThemeImage banner;
+
+        private List<InstalledPackage> projectPackages = new List<InstalledPackage>();
+        private InstallRecord record = new InstallRecord(null);
+        private Dictionary<string, string> latestKnown = new Dictionary<string, string>();
+        private string projectError;
+        private bool showIndirect;
 
         [MenuItem("Window/Forge Store")]
         public static void Open() => GetWindow<HubWindow>("Forge Store").Show();
@@ -56,7 +70,42 @@ namespace Glitchr.Store
         private void OnEnable()
         {
             minSize = new Vector2(420, 320);
+            logo ??= new ThemeImage(LogoMaxBytes, LogoMaxPixels);
+            banner ??= new ThemeImage(BannerMaxBytes, BannerMaxPixels);
+            ReadProject();
             Refresh();
+        }
+
+        private void OnDisable()
+        {
+            logo?.Clear();
+            banner?.Clear();
+        }
+
+        /// <summary>
+        /// The project's packages from Packages/manifest.json and packages-lock.json, with the
+        /// versions and names Unity already knows - local files only, no network call.
+        /// </summary>
+        private void ReadProject()
+        {
+            try
+            {
+                string folder = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "Packages");
+                string lockPath = System.IO.Path.Combine(folder, "packages-lock.json");
+                var registered = UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages();
+                var versions = registered.GroupBy(p => p.name).ToDictionary(g => g.Key, g => g.First().version);
+                projectPackages = InstalledPackages.Read(System.IO.File.ReadAllText(System.IO.Path.Combine(folder, "manifest.json")), System.IO.File.Exists(lockPath) ? System.IO.File.ReadAllText(lockPath) : null, versions);
+                var names = registered.GroupBy(p => p.name).ToDictionary(g => g.Key, g => g.First().displayName);
+                foreach (InstalledPackage package in projectPackages) package.DisplayName = names.TryGetValue(package.Name, out string display) ? display : null;
+                // Unity's recommended version when it has one, else the newest it knows for this editor.
+                latestKnown = registered.Where(p => p.versions != null).GroupBy(p => p.name).ToDictionary(g => g.Key, g => string.IsNullOrEmpty(g.First().versions.recommended) ? g.First().versions.latestCompatible : g.First().versions.recommended);
+                record = new InstallRecord(InstallRecord.ProjectPath);
+                projectError = null;
+            }
+            catch (Exception e)
+            {
+                projectError = "The project's packages: " + e.Message;
+            }
         }
 
         private async void Refresh()
@@ -69,9 +118,11 @@ namespace Glitchr.Store
             {
                 catalog = await HubCatalogReader.Read(HubSources.All());
                 installed = await HubInstaller.Installed();
+                ReadProject();
                 titleContent = new GUIContent(catalog.Theme?.Name ?? "Forge Store");
                 status = catalog.Errors.Count > 0 ? string.Join("\n", catalog.Errors) : null;
-                LoadLogo(catalog.Theme?.Logo);
+                logo.Load(catalog.Theme?.Logo, Repaint);
+                banner.Load(catalog.Theme?.Banner, Repaint);
             }
             catch (Exception e)
             {
@@ -85,7 +136,7 @@ namespace Glitchr.Store
         {
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                tab = (Tab)GUILayout.Toolbar((int)tab, new[] { "Packages", "Games", "Sources" }, EditorStyles.toolbarButton, GUILayout.Width(240));
+                tab = (Tab)GUILayout.Toolbar((int)tab, new[] { "Packages", "Installed", "Games", "Sources" }, EditorStyles.toolbarButton, GUILayout.Width(300));
                 GUILayout.FlexibleSpace();
                 if (tab != Tab.Sources) search = GUILayout.TextField(search, EditorStyles.toolbarSearchField, GUILayout.MinWidth(120));
                 using (new EditorGUI.DisabledScope(busy))
@@ -95,6 +146,7 @@ namespace Glitchr.Store
             }
             DrawHeader();
             DrawFormerNames();
+            DrawKeyChanges();
 
             if (pending != null)
             {
@@ -111,27 +163,54 @@ namespace Glitchr.Store
             switch (tab)
             {
                 case Tab.Packages: DrawPackages(); break;
+                case Tab.Installed: DrawInstalled(); break;
                 case Tab.Games: DrawGames(); break;
                 case Tab.Sources: DrawSources(); break;
             }
             EditorGUILayout.EndScrollView();
         }
 
-        /// <summary>The theme of the first hub that has one (a preset's first): its logo, name and accent. None: nothing drawn.</summary>
+        /// <summary>
+        /// The theme of the hub that has one (a preset's first): its banner, cropped to the window's
+        /// width at a fixed ratio, its logo, name and accent. No theme: nothing drawn. No banner, or
+        /// one that failed: the plain bar with the logo and the name.
+        /// </summary>
         private void DrawHeader()
         {
             HubTheme theme = catalog?.Theme;
             if (theme == null) return;
-            Rect bar = GUILayoutUtility.GetRect(0, 34, GUILayout.ExpandWidth(true));
             Color accent = Accent(theme);
-            EditorGUI.DrawRect(new Rect(bar.x, bar.yMax - 3, bar.width, 3), accent);
-            float x = bar.x + 8;
-            if (logo != null)
+            Texture2D image = banner?.Texture;
+            Texture2D mark = logo?.Texture;
+            if (image != null)
             {
-                GUI.DrawTexture(new Rect(x, bar.y + 4, 24, 24), logo, ScaleMode.ScaleToFit);
-                x += 30;
+                float width = Mathf.Max(1, position.width);
+                float height = Mathf.Clamp(Mathf.Round(width / BannerAspect), 48, 140);
+                Rect area = GUILayoutUtility.GetRect(width, height, GUILayout.ExpandWidth(true));
+                GUI.DrawTexture(area, image, ScaleMode.ScaleAndCrop);
+                // A strip of the skin's own colour under the name, so it reads on any picture.
+                var strip = new Rect(area.x, area.yMax - 27, area.width, 24);
+                EditorGUI.DrawRect(strip, EditorGUIUtility.isProSkin ? new Color(0.13f, 0.13f, 0.13f, 0.72f) : new Color(0.93f, 0.93f, 0.93f, 0.78f));
+                float x = strip.x + 8;
+                if (mark != null)
+                {
+                    GUI.DrawTexture(new Rect(x, strip.y + 2, 20, 20), mark, ScaleMode.ScaleToFit);
+                    x += 26;
+                }
+                GUI.Label(new Rect(x, strip.y + 3, strip.width - x, 18), theme.Name ?? "Forge Store", EditorStyles.boldLabel);
+                EditorGUI.DrawRect(new Rect(area.x, area.yMax - 3, area.width, 3), accent);
+
+                return;
             }
-            GUI.Label(new Rect(x, bar.y + 7, bar.width - x, 20), theme.Name ?? "Forge Store", EditorStyles.boldLabel);
+            Rect bar = GUILayoutUtility.GetRect(0, 34, GUILayout.ExpandWidth(true));
+            EditorGUI.DrawRect(new Rect(bar.x, bar.yMax - 3, bar.width, 3), accent);
+            float left = bar.x + 8;
+            if (mark != null)
+            {
+                GUI.DrawTexture(new Rect(left, bar.y + 4, 24, 24), mark, ScaleMode.ScaleToFit);
+                left += 30;
+            }
+            GUI.Label(new Rect(left, bar.y + 7, bar.width - left, 20), theme.Name ?? "Forge Store", EditorStyles.boldLabel);
         }
 
         private static Color Accent(HubTheme theme)
@@ -141,24 +220,42 @@ namespace Glitchr.Store
             return text != null && ColorUtility.TryParseHtmlString(text, out Color colour) ? colour : new Color(0.5f, 0.5f, 0.5f);
         }
 
-        /// <summary>A logo from the theme, 1 MB at most; anything that is not an image is dropped.</summary>
-        private void LoadLogo(string url)
+        /// <summary>
+        /// A store whose hub now announces another licensing key than the pinned one, without a
+        /// rotation the pinned key signed: the user accepts the new key or keeps the pinned one;
+        /// until then the store's licences are not trusted and it sells nothing here.
+        /// </summary>
+        private void DrawKeyChanges()
         {
-            if (url == logoUrl) return;
-            logoUrl = url;
-            logo = null;
-            if (string.IsNullOrEmpty(url) || !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return;
-            var request = UnityWebRequestTexture.GetTexture(url, true);
-            request.timeout = 20;
-            request.SendWebRequest().completed += _ =>
+            if (catalog == null) return;
+            foreach (HubLicensing licensing in catalog.Licensing.Where(l => l.Check == KeyCheck.Changed))
             {
-                if (request.result == UnityWebRequest.Result.Success && request.downloadedBytes <= 1024 * 1024 && url == logoUrl)
+                KeyPins.Pin pin = StoreTrust.Pins.Get(licensing.Store);
+                if (pin?.Pending == null) continue;
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                 {
-                    logo = DownloadHandlerTexture.GetContent(request);
-                    Repaint();
+                    EditorGUILayout.HelpBox(
+                        (licensing.StoreName ?? licensing.Store) + " announces a new licensing key. Pinned: " + KeyPins.Fingerprint(pin.Key) + "; announced: " + KeyPins.Fingerprint(pin.Pending)
+                        + ". It did not pass by itself: " + pin.Reason + ". Until you decide, this store's licences are not trusted. Accept it only if the store told you it changed its key.",
+                        MessageType.Warning);
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        GUILayout.FlexibleSpace();
+                        if (GUILayout.Button("Keep the pinned key", GUILayout.Width(150)))
+                        {
+                            StoreTrust.Pins.Refuse(licensing.Store);
+                            StoreTrust.Pins.Save();
+                            licensing.Check = KeyCheck.Refused;
+                        }
+                        if (GUILayout.Button("Accept the new key", GUILayout.Width(150)))
+                        {
+                            StoreTrust.Pins.Accept(licensing.Store);
+                            StoreTrust.Pins.Save();
+                            licensing.Check = KeyCheck.Same;
+                        }
+                    }
                 }
-                request.Dispose();
-            };
+            }
         }
 
         /// <summary>The project still has the package under a former name: offered to remove it (Unity has no alias).</summary>
@@ -206,7 +303,11 @@ namespace Glitchr.Store
                     if (item.Paid && !item.Installable)
                     {
                         // Only a hub that sells offers to buy; another one says what it is.
-                        if (item.Origin != null && item.Origin.Sells)
+                        if (item.Origin != null && item.Origin.Sells && StoreTrust.Pins.Get(item.Origin.Store)?.Pending != null)
+                        {
+                            GUILayout.Label("Its store's key changed: decide above first", EditorStyles.miniLabel);
+                        }
+                        else if (item.Origin != null && item.Origin.Sells)
                         {
                             if (GUILayout.Button("Buy" + (item.Price != null ? " · " + item.Price : string.Empty), GUILayout.Width(150))) Buy(item);
                         }
@@ -331,6 +432,93 @@ namespace Glitchr.Store
             return head.Contains('.') ? head : head + ".0";
         }
 
+        /// <summary>
+        /// The project's packages, read from its manifest and lock: first the ones a source of
+        /// Forge Store offers or Forge Store installed (their updates, all at once; a package whose
+        /// source is gone is flagged, not hidden), then the project's other packages. Updates and
+        /// removals go through Unity's Package Manager, which resolves every dependency.
+        /// </summary>
+        private void DrawInstalled()
+        {
+            if (projectError != null) EditorGUILayout.HelpBox(projectError, MessageType.Warning);
+            List<HubItem> items = catalog?.Items ?? new List<HubItem>();
+            var sourceKeys = new HashSet<string>(HubSources.All().Select(s => s.Key));
+            var ours = new List<(InstalledPackage Package, HubItem Item, InstallRecord.Entry Entry)>();
+            var others = new List<InstalledPackage>();
+            foreach (InstalledPackage package in projectPackages)
+            {
+                HubItem item = InstalledPackages.Offer(package, items);
+                InstallRecord.Entry entry = record.Get(package.Name);
+                if (item != null || entry != null) ours.Add((package, item, entry)); else others.Add(package);
+            }
+
+            var updates = ours.Select(o => InstalledPackages.UpdateFrom(o.Package, o.Item)).Where(u => u != null).ToList();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Label("From your sources (" + ours.Count + ")", EditorStyles.boldLabel);
+                GUILayout.FlexibleSpace();
+                using (new EditorGUI.DisabledScope(busy || updates.Count == 0))
+                {
+                    if (GUILayout.Button(updates.Count == 0 ? "Up to date" : "Update all (" + updates.Count + ")", GUILayout.Width(130)))
+                    {
+                        Run("Updating " + updates.Count + " package" + (updates.Count > 1 ? "s" : string.Empty), () => HubInstaller.Apply(updates));
+                    }
+                }
+            }
+            foreach (var (package, item, entry) in ours.Where(o => Matches(o.Package.Name, o.Package.DisplayName)))
+            {
+                string from = item?.Origin?.HubName ?? entry?.Label;
+                string flag = null;
+                if (item == null && catalog != null && !busy)
+                {
+                    flag = sourceKeys.Contains(entry.Source)
+                        ? "Its source, " + entry.Label + ", no longer lists it (or did not answer this time)."
+                        : "Its source, " + entry.Label + ", is no longer among your sources.";
+                }
+                DrawInstalledRow(package, from, InstalledPackages.UpdateFrom(package, item), flag, item?.Origin?.Theme);
+            }
+            if (ours.Count == 0) GUILayout.Label("No package of the project comes from your sources.", EditorStyles.centeredGreyMiniLabel);
+
+            EditorGUILayout.Space();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Label("The project's other packages", EditorStyles.boldLabel);
+                GUILayout.FlexibleSpace();
+                showIndirect = GUILayout.Toggle(showIndirect, "Dependencies and built-in modules", GUILayout.Width(230));
+            }
+            foreach (InstalledPackage package in others.Where(p => (showIndirect || p.Direct && !p.Name.StartsWith("com.unity.modules.", StringComparison.Ordinal)) && Matches(p.Name, p.DisplayName)))
+            {
+                latestKnown.TryGetValue(package.Name, out string latest);
+                DrawInstalledRow(package, package.Url, InstalledPackages.UpdateTo(package, latest), null, null);
+            }
+        }
+
+        private void DrawInstalledRow(InstalledPackage package, string from, PackageUpdate update, string flag, HubTheme theme)
+        {
+            Rect card = EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            if (theme != null) EditorGUI.DrawRect(new Rect(card.x, card.y, 3, card.height), Accent(theme));
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Label(package.Label, EditorStyles.boldLabel);
+                GUILayout.FlexibleSpace();
+                GUILayout.Label(package.Version ?? package.Requested ?? string.Empty, EditorStyles.miniLabel);
+            }
+            var detail = new List<string> { package.Name, package.Source ?? "not resolved yet" };
+            if (!string.IsNullOrEmpty(from)) detail.Add(from);
+            if (package.GitDescription != null) detail.Add(package.GitDescription);
+            if (!package.Direct && package.Dependents.Count > 0) detail.Add("dependency of " + string.Join(", ", package.Dependents));
+            GUILayout.Label(string.Join("  ·  ", detail), EditorStyles.wordWrappedMiniLabel);
+            if (flag != null) EditorGUILayout.HelpBox(flag, MessageType.Warning);
+            using (new EditorGUILayout.HorizontalScope())
+            using (new EditorGUI.DisabledScope(busy))
+            {
+                if (update != null && GUILayout.Button("Update to " + update.ToVersion, GUILayout.Width(150))) Run("Updating " + package.Label, () => HubInstaller.Apply(new[] { update }));
+                if (package.Direct && GUILayout.Button("Remove", GUILayout.Width(80))) Run("Removing " + package.Label, () => HubInstaller.Remove(package.Name));
+                GUILayout.FlexibleSpace();
+            }
+            EditorGUILayout.EndVertical();
+        }
+
         private void DrawGames()
         {
             if (catalog == null) return;
@@ -415,6 +603,31 @@ namespace Glitchr.Store
             }
 
             DrawGitHubAccount();
+            DrawPinnedKeys();
+        }
+
+        /// <summary>The stores' licensing keys, pinned on first use: each one's mark, a pending change, and a way to forget it.</summary>
+        private void DrawPinnedKeys()
+        {
+            var pins = StoreTrust.Pins.All.ToList();
+            if (pins.Count == 0) return;
+            EditorGUILayout.Space();
+            GUILayout.Label("Licensing keys", EditorStyles.boldLabel);
+            GUILayout.Label("A store's key is pinned the first time its hub is read; licences are checked against it, not against what the hub serves later. "
+                + (ForgeSeal.Available ? "Forge Seal checks a key the pinned one signed." : "Forge Seal (io.glitchr.licensing) is not in this project: every change of key waits for you."), EditorStyles.wordWrappedMiniLabel);
+            foreach (var pair in pins)
+            {
+                using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
+                {
+                    GUILayout.Label((pair.Value.Name ?? pair.Key) + "  ·  " + KeyPins.Fingerprint(pair.Value.Key) + (pair.Value.Pending != null ? "  ·  new key waiting: " + KeyPins.Fingerprint(pair.Value.Pending) : string.Empty), EditorStyles.wordWrappedMiniLabel);
+                    if (GUILayout.Button(new GUIContent("Forget", "Its next key is pinned again on first use."), GUILayout.Width(70)))
+                    {
+                        StoreTrust.Pins.Forget(pair.Key);
+                        StoreTrust.Pins.Save();
+                        GUIUtility.ExitGUI();
+                    }
+                }
+            }
         }
 
         /// <summary>The GitHub token for private repositories: kept by the system's secret store, or git's own.</summary>
@@ -468,6 +681,7 @@ namespace Glitchr.Store
             {
                 await action();
                 installed = await HubInstaller.Installed();
+                ReadProject();
                 status = what + ": done.";
             }
             catch (Exception e)

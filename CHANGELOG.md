@@ -4,6 +4,37 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-11-12
+
+### Added
+
+- The Installed tab: the project's packages, read from `Packages/manifest.json`
+  and `packages-lock.json` with no network call. The ones a source offers or
+  Forge Store installed come first, with their version, source, and for a Git
+  package its tag, branch or commit; their updates are made one by one or all
+  at once (one `Client.AddAndRemove`: one resolve, one recompilation); Remove.
+  A package whose source was removed, or no longer lists it, is flagged, not
+  hidden: which source installed what is kept in the project's
+  `UserSettings/ForgeStore/installed.json`. The project's other packages
+  follow, with Unity's recommended version (never across a major version);
+  dependencies and built-in modules on request.
+- The theme's banner, drawn in the window's header (the theme of a preset's
+  hub first): cropped to the window's width at 6:1, the name on a strip of the
+  skin's own colour, the accent under it. PNG or JPEG only, told by their
+  bytes, 2 MB and 4096 pixels a side at most (the logo 1 MB and 1024 pixels);
+  fetched in the background, kept in the user's `Forge Store/images` (32 MB
+  in all, the oldest first out), asked again after a day; a failure draws the
+  plain header.
+- A store's licensing key, pinned on first use: the hub's
+  `licensing.publicKey` is kept in the user's `Forge Store/keys.json`. A later,
+  different key is held as pending and shown as a warning: until the user
+  accepts it (or keeps the pinned one), the store's licences are not trusted
+  and its packages are not bought from the window. A rotation the pinned key
+  signed (`previousKey`, `rotation`) passes without a prompt; its signature is
+  checked by Forge Seal (`io.glitchr.licensing`) when the project has it, and
+  without it every change waits for the user. `StoreTrust.VerifyLicence`
+  checks a licence token against a store's pinned key through Forge Seal.
+
 ## [1.2.0] - 2026-11-12
 
 ### Added
@@ -24,7 +55,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   sources may be of the types `github` and `manifest` too.
 - A hub's theme, data only: `"theme"` with `accent`, `accentDark`, `logo`
   and `banner` (or the older `color` and `logo`) gives the window its
-  header (logo and name) and its accent; `banner` is read, not drawn yet.
+  header (logo and name) and its accent; `banner` is read, not drawn yet
+  (drawn since 1.3.0).
 - A notice for a project that still has the former name (`io.glitchr.hub`,
   `com.glitchr.hub`), with a button that removes it.
 

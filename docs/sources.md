@@ -43,10 +43,20 @@ A JSON document that names a hub and its sources - what a forge serves at
   ```
 
   `accent` and `accentDark` are `#rgb` or `#rrggbb` colours for Unity's light
-  and dark skins; the logo is an HTTPS image of 1 MB at most. The window draws
-  the accent and the logo; `banner` is read for the clients with room for one. Without a theme
-  (the older `color` and `logo` keys count as one), the window keeps its
-  plain look.
+  and dark skins. The logo and the banner are HTTPS addresses of PNG or JPEG
+  images - told by their first bytes, whatever the server says; an SVG, or
+  anything else, is not drawn. The logo is 1 MB and 1024 pixels a side at
+  most; the banner 2 MB and 4096 pixels a side, drawn across the window's
+  width at a ratio of 6:1, cropped around its centre (1500 x 250 pixels fits
+  it exactly), with the hub's name on a strip of the skin's colour and the
+  accent under it - keep the picture's subject away from its bottom-left
+  corner. The window shows the theme of a preset's hub first, else the first
+  hub that has one. Images are fetched in the background, kept in the user's
+  `Forge Store/images` (32 MB in all), and asked again after a day; one that
+  fails is left out. Without a theme (the older `color` and `logo` keys count
+  as one), the window keeps its plain look.
+- `licensing`, optional, is the public key that signs the store's licences:
+  see [Licensing: a store's key](#licensing-a-stores-key).
 
 ### Or in a package's `package.json`
 
@@ -79,6 +89,48 @@ is a source by itself, read from the disk: a company's base package brings its
 registry, its GitHub organisation and its theme to everyone who installs it.
 It shows under Sources as a preset, which the user can hide (and show again).
 Nothing of the package runs: the window reads its JSON.
+
+## Licensing: a store's key
+
+A store that issues licences declares the Ed25519 public key that signs them
+(32 bytes, base64) - data only:
+
+```json
+"licensing": {"publicKey": "<base64>"}
+```
+
+The window pins it the first time it reads the hub (trust on first use), per
+user, in `Forge Store/keys.json` under the local application data. Licences
+are checked against the pinned key, never against what the hub serves later -
+otherwise whoever can change a store's hub.json could swap the key and sign
+licences of their own. A store is known by its hub's manifest URL, by its
+preset package's name, or by its Git repository (whatever the tag).
+
+When the hub announces another key:
+
+- **A signed rotation passes alone.** The store keeps its previous key in the
+  hub with its signature of the new one: the Ed25519 signature, by the
+  previous key, of the UTF-8 text `forge-key-rotation:v1:` followed by the new
+  key exactly as written in `publicKey`.
+
+  ```json
+  "licensing": {"publicKey": "<new, base64>", "previousKey": "<pinned, base64>", "rotation": "<signature, base64>"}
+  ```
+
+  The signature is checked by Forge Seal (`io.glitchr.licensing`) when the
+  project has it. Without Forge Seal, the window cannot check it, and the
+  change waits for the user like any other. A rotation passes one step only:
+  a store that rotated twice since the user's last visit is confirmed by hand.
+- **Any other change waits for the user.** The window shows both keys'
+  fingerprints and why the change did not pass alone. Until the user accepts
+  the new key, the store's licences are not trusted (`StoreTrust.TrustedKey`
+  gives null) and its packages are not bought from the window. **Keep the
+  pinned key** keeps the old one trusted and stops asking for that new key.
+- Sources > Licensing keys lists the pinned keys; **Forget** drops one, whose
+  next key is then pinned again on first use.
+
+Light protection, not DRM: the pin protects the user against a swapped key,
+not the store against a determined user.
 
 ## A UPM registry
 
