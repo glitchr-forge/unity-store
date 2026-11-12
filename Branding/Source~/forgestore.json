@@ -1,0 +1,34 @@
+{
+ "first": "Forge",
+ "second": "Store",
+ "join": false,
+ "tagline": "Every store inside Unity",
+ "icon": "anvil_centred.png",
+ "gradient": [
+  "#ffd23f",
+  "#ff7a1a",
+  "#e0301e"
+ ],
+ "summary": [
+  "Browse every registry in one fast store,",
+  "install in one click, buy and license",
+  "packages from any Forge."
+ ],
+ "packageName": "Forge Store - Package Store for Unity",
+ "summaryText": "Forge Store brings a package store into the Unity editor: every registry in one cached grid, one-click install and update, and licences checked offline for packages bought on any Forge.",
+ "background": [
+  "#5a5e66",
+  "#1c1e22"
+ ],
+ "file": "Forge Store",
+ "logoScale": 1.1,
+ "twoLines": false,
+ "iconTagline": false,
+ "iconBox": [
+  49,
+  66,
+  91
+ ],
+ "anchorX": 11,
+ "iconTwoLines": true
+}
