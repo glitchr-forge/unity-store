@@ -10,13 +10,21 @@ package hubs and installs their packages in the open project in one click:
 - **Games.** A hub's games: a free one is played in the browser (and
   downloaded from its page); a paid one is downloaded once bought, played in
   the browser only when its studio opened a playable preview.
-- **Sources.** Added on the fly and kept per user, not per project:
-  - a **hub manifest** (`/upm/-/hub.json` on a forge running
+- **Sources.** Added on the fly and kept per user, not per project. Nothing is
+  built in: the window is open source and belongs to no one.
+  - a **hub manifest** (`/upm/-/hub.json` on a Forge running
     omnibase/forge, or `hub.json` of a static hub on GitHub Pages);
   - a **UPM registry** and its scopes (OpenUPM, a company's Verdaccio...);
-  - a **Git package** URL.
+  - a **Git package** URL;
+  - a **GitHub owner and a repository pattern** (`my-org`, `unity-*`): every
+    matching repository that is a UPM package, public ones without an
+    account, private ones with your GitHub token. Installed by its Git URL at
+    the tag or branch you pick; a newer tag offers an update.
 
-  Glitch Art's hub is there from the start.
+  A package of the project can preset sources: the `"hub"` section of its
+  `package.json` (a company's base package lists its registry and its GitHub
+  organisation there, and may give the window its theme). Presets can be
+  hidden.
 - **Buy.** Only for a source whose manifest declares a checkout (a static
   hub never does). The window opens the hub's page in the browser with a
   short code; the user signs in, buys, and links the editor. The window then
@@ -28,18 +36,49 @@ Requires Unity 2021.3 or later. Editor only: nothing of it goes into a build.
 
 ## Installation
 
-From Glitch Art's registry, in `Packages/manifest.json`:
+From Git, in `Packages/manifest.json`:
 
 ```json
-"scopedRegistries": [
-  {"name": "Glitch Art", "url": "https://glitchr.io/upm", "scopes": ["io.glitchr"]}
-],
 "dependencies": {
-  "io.glitchr.store": "1.0.0"
+  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.2.0"
 }
 ```
 
-Or from Git: `"io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#1.0.0"`.
+(Package Manager > + > Add package from git URL does the same.) A registry
+that serves the package - a Forge, a static hub - works as well.
+
+### From the former name
+
+The package was `io.glitchr.hub` (and `com.glitchr.hub` before it). Unity's
+Package Manager has no alias between package names, so a project that has the
+old one replaces it by a one-line change in `Packages/manifest.json`:
+
+```diff
+-  "io.glitchr.hub": "...",
++  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.2.0",
+```
+
+When both are there, the window shows a notice with a button that removes
+the old one. The saved sources are kept: they live in the user's EditorPrefs.
+
+## Private GitHub repositories
+
+The window lists them with a token that can read them (Sources > GitHub): a
+fine-grained token with *Contents: read* on the repositories, or a classic one
+with `repo`. It is kept by the system - the macOS keychain, Windows' DPAPI
+for the current user, the Secret Service (`secret-tool`) on Linux - or read
+from git's own credential helper when you tick it. It is sent to
+`api.github.com` only, never written into the project and never logged.
+
+Unity's Package Manager fetches a Git package with your own `git`: a private
+repository installs once git can read it (a credential helper or an SSH key,
+see Unity's manual, "Using private repositories with HTTPS Git URLs"). No
+token is ever put in the manifest's URL.
+
+GitHub allows 60 requests an hour without a token, 5,000 with one. The window
+asks with the last ETag (`If-None-Match`), keeps the answers in the user's
+folder (`Forge Store/github.json` under the local application data), and
+stops asking until the limit resets, showing what it already knows.
 
 See [docs/sources.md](docs/sources.md) for the hub manifest and the kinds of
 source, [docs/buying.md](docs/buying.md) for the device flow.
@@ -48,7 +87,13 @@ source, [docs/buying.md](docs/buying.md) for the device flow.
 
 Editor tests (Window > General > Test Runner > EditMode), with the package in
 the project's `testables`: the JSON the window reads, the manifest it writes,
-the key it keeps.
+the key it keeps, and a GitHub source against canned answers of GitHub's API
+(pattern, packages, tags, ETags, rate limit, where the token goes). In batch
+mode:
+
+```sh
+Unity -batchmode -nographics -projectPath <project> -runTests -testPlatform EditMode -testResults results.xml
+```
 
 ## Licence
 

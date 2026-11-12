@@ -24,6 +24,8 @@ namespace Glitchr.Store
         public HubOrigin Origin;
         /// <summary>A Git package: its URL, in place of a registry.</summary>
         public string GitUrl;
+        /// <summary>A package of a GitHub source: its repository, visibility and tags.</summary>
+        public GitHubPackage GitHub;
 
         public string Label => string.IsNullOrEmpty(DisplayName) ? Name : DisplayName;
     }
@@ -59,6 +61,7 @@ namespace Glitchr.Store
         public List<string> Scopes = new List<string>();
         public string DeviceUrl;
         public string TokenUrl;
+        public HubTheme Theme;
         public bool Sells => !string.IsNullOrEmpty(DeviceUrl) && !string.IsNullOrEmpty(TokenUrl);
     }
 
@@ -70,27 +73,73 @@ namespace Glitchr.Store
         public List<string> Errors = new List<string>();
         public string Brand;
         public string Color;
+        /// <summary>The first theme a hub declared (a preset's first): the window's header.</summary>
+        public HubTheme Theme;
+    }
+
+    /// <summary>
+    /// A hub's look, data only: its name, logo, banner and accent colours (Unity's light and dark
+    /// skins), from its "theme" block - or its older "color" and "logo" keys. No theme: the plain
+    /// Forge Store look.
+    /// </summary>
+    public sealed class HubTheme
+    {
+        public string Name;
+        public string Logo;
+        public string Banner;
+        public string Accent;
+        public string AccentDark;
+
+        public static HubTheme Of(object hub)
+        {
+            object theme = Json.Object(Json.Get(hub, "theme"));
+            var read = new HubTheme
+            {
+                Name = Json.String(Json.Get(hub, "name")),
+                Logo = Json.String(Json.Get(theme, "logo")) ?? Json.String(Json.Get(hub, "logo")),
+                Banner = Json.String(Json.Get(theme, "banner")),
+                Accent = Colour(Json.String(Json.Get(theme, "accent")) ?? Json.String(Json.Get(hub, "color"))),
+            };
+            read.AccentDark = Colour(Json.String(Json.Get(theme, "accentDark"))) ?? read.Accent;
+
+            return read.Accent == null && read.Logo == null && read.Banner == null ? null : read;
+        }
+
+        /// <summary>A "#rgb" or "#rrggbb" colour, else null: nothing else is read from a registry.</summary>
+        public static string Colour(string text)
+        {
+            return text != null && System.Text.RegularExpressions.Regex.IsMatch(text, "^#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$") ? text : null;
+        }
     }
 
     public static class HubCatalogReader
     {
+        /// <summary>The GitHub client of a reading: its cache in the user's folder, the user's token.</summary>
+        public static Func<GitHubApi> GitHubClient = () => new GitHubApi(UnityWebTransport.Instance, new GitHubCache(GitHubCache.DefaultPath), GitHubToken.Current);
+
         public static async Task<HubCatalogResult> Read(IEnumerable<HubSource> sources)
         {
             var result = new HubCatalogResult();
+            GitHubApi github = null;
+            GitHubApi GitHub() => github ??= GitHubClient();
             foreach (HubSource source in sources)
             {
                 try
                 {
                     switch (source.Type)
                     {
-                        case HubSource.Manifest: await ReadManifest(source, result); break;
+                        case HubSource.Manifest: await ReadManifest(source, result, GitHub); break;
+                        case HubSource.Package: await ReadHub(HubPresets.Read(source.Url), source, result, GitHub); break;
+                        case HubSource.GitHub:
+                            await ReadGitHub(GitHub(), source.Owner, source.Pattern, new HubOrigin { Source = source, HubName = source.Label }, result);
+                            break;
                         case HubSource.Upm:
                             var origin = new HubOrigin { Source = source, HubName = source.Label, Registry = source.Url.TrimEnd('/'), RegistryName = source.Label, Scopes = source.Scopes };
                             await ReadRegistry(origin, null, result);
                             break;
                         case HubSource.Git:
                             object hub = await ReadGit(source.Url, source.Name, new HubOrigin { Source = source, HubName = source.Label }, result);
-                            if (hub != null) await ReadHub(hub, source, result);
+                            if (hub != null) await ReadHub(hub, source, result, GitHub);
                             break;
                     }
                 }
@@ -99,15 +148,49 @@ namespace Glitchr.Store
                     result.Errors.Add(source.Label + ": " + e.Message);
                 }
             }
+            if (github != null)
+            {
+                try { github.SaveCache(); }
+                catch (Exception e) { result.Errors.Add("GitHub cache: " + e.Message); }
+            }
 
             return result;
         }
 
-        private static async Task ReadManifest(HubSource source, HubCatalogResult result)
+        private static async Task ReadManifest(HubSource source, HubCatalogResult result, Func<GitHubApi> github, string url = null, int depth = 0)
         {
-            HubHttp.Answer answer = await HubHttp.Get(PackageJsonUrl(source.Url) ?? source.Url, null, source.CertificateSha256);
+            url ??= source.Url;
+            HubHttp.Answer answer = await HubHttp.Get(PackageJsonUrl(url) ?? url, null, source.CertificateSha256);
             if (!answer.Ok) throw new Exception(answer.Error ?? ("HTTP " + answer.Status));
-            await ReadHub(HubOf(answer.Json), source, result);
+            await ReadHub(HubOf(answer.Json), source, result, github, depth);
+        }
+
+        /// <summary>A GitHub owner's repositories matching the pattern that are UPM packages, each installable from Git.</summary>
+        private static async Task ReadGitHub(GitHubApi api, string owner, string pattern, HubOrigin origin, HubCatalogResult result)
+        {
+            foreach (GitHubPackage package in await GitHubCatalog.Packages(api, owner, pattern, result.Errors))
+            {
+                // Already listed by a Git source of the same repository: that entry gains the tags.
+                HubItem known = result.Items.FirstOrDefault(i => i.Name == package.Name && i.GitHub == null && SameRepository(i.GitUrl, package.GitUrl));
+                if (known != null)
+                {
+                    known.GitHub = package;
+                    known.Page ??= package.Page;
+                    continue;
+                }
+                result.Items.Add(new HubItem
+                {
+                    Name = package.Name,
+                    DisplayName = package.DisplayName ?? package.Repository,
+                    Description = package.Description,
+                    Version = package.LatestVersion,
+                    Page = package.Page,
+                    GitUrl = package.GitUrl,
+                    GitHub = package,
+                    Origin = origin,
+                    Versions = package.Tags.Select(t => new HubVersion { Version = t }).ToList(),
+                });
+            }
         }
 
         /// <summary>
@@ -175,11 +258,13 @@ namespace Glitchr.Store
             return Json.Object(hub) != null ? hub : null;
         }
 
-        private static async Task ReadHub(object manifest, HubSource source, HubCatalogResult result)
+        private static async Task ReadHub(object manifest, HubSource source, HubCatalogResult result, Func<GitHubApi> github, int depth = 0)
         {
             string name = Json.String(Json.Get(manifest, "name")) ?? source.Label;
+            HubTheme theme = HubTheme.Of(manifest);
             result.Brand ??= name;
             result.Color ??= Json.String(Json.Get(manifest, "color"));
+            result.Theme ??= theme;
             string device = Json.String(Json.Get(manifest, "checkout", "device"));
             string token = Json.String(Json.Get(manifest, "checkout", "token"));
             string games = Json.String(Json.Get(manifest, "games"));
@@ -187,31 +272,58 @@ namespace Glitchr.Store
 
             foreach (object entry in Json.Array(Json.Get(manifest, "sources")) ?? new List<object>())
             {
-                string type = Json.String(Json.Get(entry, "type")) ?? HubSource.Upm;
-                string url = Json.String(Json.Get(entry, "url"));
-                if (string.IsNullOrEmpty(url)) continue;
+                // Each entry on its own: a hub that does not answer, or a private owner without a
+                // token, does not hide the hub's other sources.
                 string label = Json.String(Json.Get(entry, "name")) ?? name;
-                if (type == HubSource.Git)
+                try
                 {
-                    await ReadGit(url, label, new HubOrigin { Source = source, HubName = name }, result);
-                    continue;
+                    await ReadEntry(entry, manifest, name, label, theme, device, token, games, catalogs, source, result, github, depth);
                 }
-                var origin = new HubOrigin
+                catch (Exception e)
                 {
-                    Source = source, HubName = name, Color = Json.String(Json.Get(manifest, "color")),
-                    Registry = url.TrimEnd('/'), RegistryName = label,
-                    Scopes = (Json.Array(Json.Get(entry, "scopes")) ?? new List<object>()).OfType<string>().ToList(),
-                    DeviceUrl = device, TokenUrl = token,
-                };
-                string catalog = Json.String(Json.Get(entry, "catalog"));
-                if (!string.IsNullOrEmpty(catalog)) catalogs.Add(catalog);
-                await ReadRegistry(origin, catalog, result, games == catalog);
+                    result.Errors.Add(label + ": " + e.Message);
+                }
             }
             if (!string.IsNullOrEmpty(games) && !catalogs.Contains(games))
             {
                 HubHttp.Answer g = await HubHttp.Get(games, null, source.CertificateSha256);
                 if (g.Ok) ReadGames(g.Json, result);
             }
+        }
+
+        private static async Task ReadEntry(object entry, object manifest, string name, string label, HubTheme theme, string device, string token, string games, HashSet<string> catalogs, HubSource source, HubCatalogResult result, Func<GitHubApi> github, int depth)
+        {
+            string type = Json.String(Json.Get(entry, "type")) ?? HubSource.Upm;
+            string url = Json.String(Json.Get(entry, "url"));
+            if (type == HubSource.GitHub)
+            {
+                await ReadGitHub(github(), Json.String(Json.Get(entry, "owner")), Json.String(Json.Get(entry, "pattern")), new HubOrigin { Source = source, HubName = name, Theme = theme }, result);
+
+                return;
+            }
+            if (string.IsNullOrEmpty(url)) return;
+            if (type == HubSource.Manifest)
+            {
+                if (depth < 2) await ReadManifest(source, result, github, url, depth + 1); // a hub naming a hub, not forever
+
+                return;
+            }
+            if (type == HubSource.Git)
+            {
+                await ReadGit(url, label, new HubOrigin { Source = source, HubName = name, Theme = theme }, result);
+
+                return;
+            }
+            var origin = new HubOrigin
+            {
+                Source = source, HubName = name, Color = Json.String(Json.Get(manifest, "color")),
+                Registry = url.TrimEnd('/'), RegistryName = label,
+                Scopes = (Json.Array(Json.Get(entry, "scopes")) ?? new List<object>()).OfType<string>().ToList(),
+                DeviceUrl = device, TokenUrl = token, Theme = theme,
+            };
+            string catalog = Json.String(Json.Get(entry, "catalog"));
+            if (!string.IsNullOrEmpty(catalog)) catalogs.Add(catalog);
+            await ReadRegistry(origin, catalog, result, games == catalog);
         }
 
         /// <summary>A registry's packages: from its forge catalogue when it has one, else from its search and documents.</summary>
@@ -312,6 +424,18 @@ namespace Glitchr.Store
             double cents = Json.Get(cheapest, "price") is double c ? c : 0;
 
             return (cents / 100).ToString("0.00", CultureInfo.InvariantCulture) + " " + (Json.String(Json.Get(cheapest, "currency")) ?? string.Empty);
+        }
+
+        /// <summary>Two Git URLs of the same repository, whatever their reference or folder.</summary>
+        public static bool SameRepository(string a, string b)
+        {
+            string Base(string url)
+            {
+                string u = (url ?? string.Empty).Split('#')[0].Split('?')[0].TrimEnd('/');
+                return (u.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? u.Substring(0, u.Length - 4) : u).ToLowerInvariant();
+            }
+
+            return !string.IsNullOrEmpty(a) && Base(a) == Base(b);
         }
 
         private static string GitName(string url)

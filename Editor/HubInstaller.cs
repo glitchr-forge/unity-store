@@ -24,11 +24,17 @@ namespace Glitchr.Store
             return request.Result.ToDictionary(p => p.name, p => p.version);
         }
 
+        /// <summary>
+        /// Adds or moves the package: a registry's at that version (the latest when null), a Git
+        /// package at that tag or branch (for a GitHub source, its latest tag when null). Private
+        /// repositories are fetched by Unity's git with the user's own git credentials: no token is
+        /// ever written into the project's manifest.
+        /// </summary>
         public static async Task Install(HubItem item, string version = null)
         {
             if (!string.IsNullOrEmpty(item.GitUrl))
             {
-                await Add(item.GitUrl);
+                await Add(GitIdentifier(item, version));
 
                 return;
             }
@@ -44,6 +50,16 @@ namespace Glitchr.Store
                 manifest.Save();
             }
             await Add(item.Name + "@" + (version ?? item.Version));
+        }
+
+        /// <summary>The Git URL Unity's Package Manager is given: the URL, then #reference when one applies.</summary>
+        public static string GitIdentifier(HubItem item, string reference = null)
+        {
+            reference ??= item.GitHub?.LatestTag;
+            if (string.IsNullOrEmpty(reference)) return item.GitUrl;
+            int hash = item.GitUrl.IndexOf('#');
+
+            return (hash >= 0 ? item.GitUrl.Substring(0, hash) : item.GitUrl) + "#" + reference;
         }
 
         public static async Task Remove(string name)
