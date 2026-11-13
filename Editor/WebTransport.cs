@@ -9,6 +9,8 @@ namespace Glitchr.Store
     public sealed class WebRequest
     {
         public string Url;
+        /// <summary>A 3xx is handed back as it is (the caller decides whether to follow it), not followed.</summary>
+        public bool NoRedirects;
         public Dictionary<string, string> Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -40,6 +42,7 @@ namespace Glitchr.Store
             var web = UnityWebRequest.Get(request.Url);
             foreach (KeyValuePair<string, string> header in request.Headers) web.SetRequestHeader(header.Key, header.Value);
             web.timeout = 30;
+            if (request.NoRedirects) web.redirectLimit = 0;
             var completion = new TaskCompletionSource<WebResponse>();
             web.SendWebRequest().completed += _ =>
             {

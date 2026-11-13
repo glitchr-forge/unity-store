@@ -18,7 +18,10 @@ namespace Glitchr.Store
     /// </summary>
     public sealed class HubWindow : EditorWindow
     {
-        private enum Tab { Packages, Installed, Games, Sources }
+        private enum Tab { Packages, Installed, Games, Profiles, Sources }
+
+        /// <summary>A URL profile is read again on demand, at most once per editor start (SessionState lasts until Unity quits).</summary>
+        private const string RefreshedKey = "Glitchr.Store.ProfileRefreshed.";
 
         /// <summary>A theme's banner: drawn at this width-to-height ratio, cropped to it.</summary>
         public const float BannerAspect = 6f;
@@ -64,6 +67,18 @@ namespace Glitchr.Store
         private string projectError;
         private bool showIndirect;
 
+        private List<ForgeProfile> profiles = new List<ForgeProfile>();
+        private string activeProfile;
+        private string profilesError;
+        private string newProfileUrl = string.Empty;
+        private string renaming;
+        private string renameText = string.Empty;
+
+        private Dictionary<string, UnityEditor.PackageManager.PackageInfo> registeredInfo = new Dictionary<string, UnityEditor.PackageManager.PackageInfo>();
+        private Dictionary<string, List<PackageSample>> samples = new Dictionary<string, List<PackageSample>>();
+        private Dictionary<string, string[]> unityVersions = new Dictionary<string, string[]>();
+        private readonly HashSet<string> samplesOpen = new HashSet<string>();
+
         [MenuItem("Window/Forge Store")]
         public static void Open() => GetWindow<HubWindow>("Forge Store").Show();
 
@@ -72,6 +87,8 @@ namespace Glitchr.Store
             minSize = new Vector2(420, 320);
             logo ??= new ThemeImage(LogoMaxBytes, LogoMaxPixels);
             banner ??= new ThemeImage(BannerMaxBytes, BannerMaxPixels);
+            HubInstaller.Offered = () => catalog?.Items ?? new List<HubItem>();
+            ReadProfiles();
             ReadProject();
             Refresh();
         }
@@ -100,11 +117,45 @@ namespace Glitchr.Store
                 // Unity's recommended version when it has one, else the newest it knows for this editor.
                 latestKnown = registered.Where(p => p.versions != null).GroupBy(p => p.name).ToDictionary(g => g.Key, g => string.IsNullOrEmpty(g.First().versions.recommended) ? g.First().versions.latestCompatible : g.First().versions.recommended);
                 record = new InstallRecord(InstallRecord.ProjectPath);
+                registeredInfo = registered.GroupBy(p => p.name).ToDictionary(g => g.Key, g => g.First());
+                unityVersions = registered.Where(p => p.versions != null).GroupBy(p => p.name).ToDictionary(g => g.Key, g => g.First().versions.compatible ?? new string[0]);
+                samples = new Dictionary<string, List<PackageSample>>();
+                foreach (var info in registeredInfo.Values)
+                {
+                    string json = System.IO.Path.Combine(info.resolvedPath ?? string.Empty, "package.json");
+                    try
+                    {
+                        var list = System.IO.File.Exists(json) ? PackageSamples.Read(System.IO.File.ReadAllText(json)) : null;
+                        if (list != null && list.Count > 0) samples[info.name] = list;
+                    }
+                    catch (Exception)
+                    {
+                        // A package.json that does not parse has no samples to offer.
+                    }
+                }
                 projectError = null;
             }
             catch (Exception e)
             {
                 projectError = "The project's packages: " + e.Message;
+            }
+        }
+
+        /// <summary>The user's profiles, read from the shared file (Forge Hub may have changed it).</summary>
+        private void ReadProfiles()
+        {
+            try
+            {
+                ProfileStore store = HubSources.Profiles();
+                profiles = store.Profiles();
+                activeProfile = store.Active;
+                profilesError = null;
+            }
+            catch (Exception e)
+            {
+                profiles = new List<ForgeProfile>();
+                activeProfile = null;
+                profilesError = "Your profiles file cannot be read (" + e.Message + "): no profile is used, and it is not rewritten.";
             }
         }
 
@@ -116,10 +167,11 @@ namespace Glitchr.Store
             Repaint();
             try
             {
+                ReadProfiles();
                 catalog = await HubCatalogReader.Read(HubSources.All());
                 installed = await HubInstaller.Installed();
                 ReadProject();
-                titleContent = new GUIContent(catalog.Theme?.Name ?? "Forge Store");
+                titleContent = new GUIContent(catalog.Profile ?? catalog.Theme?.Name ?? "Forge Store");
                 status = catalog.Errors.Count > 0 ? string.Join("\n", catalog.Errors) : null;
                 logo.Load(catalog.Theme?.Logo, Repaint);
                 banner.Load(catalog.Theme?.Banner, Repaint);
@@ -136,9 +188,9 @@ namespace Glitchr.Store
         {
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                tab = (Tab)GUILayout.Toolbar((int)tab, new[] { "Packages", "Installed", "Games", "Sources" }, EditorStyles.toolbarButton, GUILayout.Width(300));
+                tab = (Tab)GUILayout.Toolbar((int)tab, new[] { "Packages", "Installed", "Games", "Profiles", "Sources" }, EditorStyles.toolbarButton, GUILayout.Width(370));
                 GUILayout.FlexibleSpace();
-                if (tab != Tab.Sources) search = GUILayout.TextField(search, EditorStyles.toolbarSearchField, GUILayout.MinWidth(120));
+                if (tab != Tab.Sources && tab != Tab.Profiles) search = GUILayout.TextField(search, EditorStyles.toolbarSearchField, GUILayout.MinWidth(120));
                 using (new EditorGUI.DisabledScope(busy))
                 {
                     if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(60))) Refresh();
@@ -165,6 +217,7 @@ namespace Glitchr.Store
                 case Tab.Packages: DrawPackages(); break;
                 case Tab.Installed: DrawInstalled(); break;
                 case Tab.Games: DrawGames(); break;
+                case Tab.Profiles: DrawProfiles(); break;
                 case Tab.Sources: DrawSources(); break;
             }
             EditorGUILayout.EndScrollView();
@@ -178,7 +231,9 @@ namespace Glitchr.Store
         private void DrawHeader()
         {
             HubTheme theme = catalog?.Theme;
-            if (theme == null) return;
+            string profileName = catalog?.Profile;
+            if (theme == null && profileName == null) return;
+            string title = profileName ?? theme?.Name ?? "Forge Store";
             Color accent = Accent(theme);
             Texture2D image = banner?.Texture;
             Texture2D mark = logo?.Texture;
@@ -197,7 +252,7 @@ namespace Glitchr.Store
                     GUI.DrawTexture(new Rect(x, strip.y + 2, 20, 20), mark, ScaleMode.ScaleToFit);
                     x += 26;
                 }
-                GUI.Label(new Rect(x, strip.y + 3, strip.width - x, 18), theme.Name ?? "Forge Store", EditorStyles.boldLabel);
+                GUI.Label(new Rect(x, strip.y + 3, strip.width - x, 18), title, EditorStyles.boldLabel);
                 EditorGUI.DrawRect(new Rect(area.x, area.yMax - 3, area.width, 3), accent);
 
                 return;
@@ -210,7 +265,7 @@ namespace Glitchr.Store
                 GUI.DrawTexture(new Rect(left, bar.y + 4, 24, 24), mark, ScaleMode.ScaleToFit);
                 left += 30;
             }
-            GUI.Label(new Rect(left, bar.y + 7, bar.width - left, 20), theme.Name ?? "Forge Store", EditorStyles.boldLabel);
+            GUI.Label(new Rect(left, bar.y + 7, bar.width - left, 20), title, EditorStyles.boldLabel);
         }
 
         private static Color Accent(HubTheme theme)
@@ -322,14 +377,17 @@ namespace Glitchr.Store
                     }
                     else if (current == null)
                     {
-                        if (GUILayout.Button("Install", GUILayout.Width(90))) Run("Installing " + item.Label, () => HubInstaller.Install(item));
+                        if (GUILayout.Button("Install", GUILayout.Width(90))) Run("Installing " + item.Label, progress => HubInstaller.Install(item, null, progress));
+                        VersionMenu(item.Name, VersionChoices.For(item), true, item, "Version…");
                     }
                     else
                     {
-                        if (item.Version != null && current != item.Version && GitUrlOrNewer(item, current) && GUILayout.Button("Update to " + item.Version, GUILayout.Width(130)))
+                        bool newer = item.Version != null && current != item.Version && GitUrlOrNewer(item, current);
+                        if (newer && GUILayout.Button("Update to " + item.Version, GUILayout.Width(130)))
                         {
-                            Run("Updating " + item.Label, () => HubInstaller.Install(item));
+                            Run("Updating " + item.Label, progress => HubInstaller.Install(item, null, progress));
                         }
+                        VersionMenu(item.Name, VersionChoices.For(item, current), true, item, newer ? "▾" : "Other version…");
                         if (GUILayout.Button("Remove", GUILayout.Width(80))) Run("Removing " + item.Label, () => HubInstaller.Remove(item.Name));
                     }
                     GUILayout.FlexibleSpace();
@@ -385,19 +443,64 @@ namespace Glitchr.Store
 
             if (current == null)
             {
-                if (GUILayout.Button("Install", GUILayout.Width(90))) Run("Installing " + item.Label, () => HubInstaller.Install(item, target));
+                if (GUILayout.Button("Install", GUILayout.Width(90))) Run("Installing " + item.Label, progress => HubInstaller.Install(item, target, progress));
             }
             else
             {
-                if (chosen == null && GitHubCatalog.Updatable(current, package.LatestVersion))
+                bool newer = chosen == null && GitHubCatalog.Updatable(current, package.LatestVersion);
+                if (newer)
                 {
-                    if (GUILayout.Button("Update to " + (package.LatestTag ?? package.LatestVersion), GUILayout.Width(150))) Run("Updating " + item.Label, () => HubInstaller.Install(item, package.LatestTag ?? package.DefaultBranch));
+                    if (GUILayout.Button("Update to " + (package.LatestTag ?? package.LatestVersion), GUILayout.Width(150))) Run("Updating " + item.Label, progress => HubInstaller.Install(item, package.LatestTag ?? package.DefaultBranch, progress));
                 }
                 else if (chosen != null && GUILayout.Button("Switch to " + (reference ?? package.DefaultBranch), GUILayout.Width(150)))
                 {
-                    Run("Moving " + item.Label, () => HubInstaller.Install(item, target));
+                    Run("Moving " + item.Label, progress => HubInstaller.Install(item, target, progress));
                 }
+                VersionMenu(item.Name, VersionChoices.For(item, current, InstalledReference(item.Name)), true, item, newer ? "▾" : "Other version…");
                 if (GUILayout.Button("Remove", GUILayout.Width(80))) Run("Removing " + item.Label, () => HubInstaller.Remove(item.Name));
+            }
+        }
+
+        /// <summary>The installed Git package's reference (its tag), from the project's manifest.</summary>
+        private string InstalledReference(string name) => projectPackages.FirstOrDefault(p => p.Name == name)?.GitReference;
+
+        /// <summary>
+        /// The Update button's menu: every version known, newest first, older ones to go back; the
+        /// installed one greyed. A move across a major version of a package that is not from the
+        /// user's sources asks first.
+        /// </summary>
+        private void VersionMenu(string name, List<VersionChoice> choices, bool fromSources, HubItem item, string label)
+        {
+            if (choices.Count == 0 || choices.Count == 1 && choices[0].Installed) return;
+            if (!GUILayout.Button(new GUIContent(label, "Every version known, older ones included: the one chosen is installed exactly."), GUILayout.Width(label.Length <= 2 ? 22 : 110))) return;
+            var menu = new GenericMenu();
+            foreach (VersionChoice choice in choices)
+            {
+                // A "/" would open a sub-menu.
+                var text = new GUIContent(choice.Label.Replace('/', '\u2215') + (choice.CrossesMajor && !choice.Installed ? "  · major" : string.Empty));
+                if (choice.Installed) menu.AddDisabledItem(text, true);
+                else menu.AddItem(text, false, () => Choose(name, choice, fromSources, item));
+            }
+            menu.ShowAsContext();
+        }
+
+        private void Choose(string name, VersionChoice choice, bool fromSources, HubItem item)
+        {
+            if (VersionChoices.NeedsConfirmation(choice, fromSources)
+                && !EditorUtility.DisplayDialog("Another major version", name + " " + choice.Version + " is another major version than the installed one: it may change or break what the project uses. Install it?", "Install " + choice.Version, "Cancel"))
+            {
+                return;
+            }
+            string what = "Installing " + name + " " + (choice.Reference ?? choice.Version);
+            if (item != null)
+            {
+                // A GitHub package at the tag; a registry's at the version; a plain Git URL as it is.
+                string version = item.GitHub != null ? choice.Reference : string.IsNullOrEmpty(item.GitUrl) ? choice.Version : null;
+                Run(what, progress => HubInstaller.Install(item, version, progress));
+            }
+            else
+            {
+                Run(what, progress => HubInstaller.Apply(new[] { VersionChoices.Update(name, choice) }, null, progress));
             }
         }
 
@@ -461,21 +564,17 @@ namespace Glitchr.Store
                 {
                     if (GUILayout.Button(updates.Count == 0 ? "Up to date" : "Update all (" + updates.Count + ")", GUILayout.Width(130)))
                     {
-                        Run("Updating " + updates.Count + " package" + (updates.Count > 1 ? "s" : string.Empty), () => HubInstaller.Apply(updates));
+                        Run("Updating " + updates.Count + " package" + (updates.Count > 1 ? "s" : string.Empty), progress => HubInstaller.Apply(updates, null, progress));
                     }
                 }
             }
             foreach (var (package, item, entry) in ours.Where(o => Matches(o.Package.Name, o.Package.DisplayName)))
             {
                 string from = item?.Origin?.HubName ?? entry?.Label;
-                string flag = null;
-                if (item == null && catalog != null && !busy)
-                {
-                    flag = sourceKeys.Contains(entry.Source)
-                        ? "Its source, " + entry.Label + ", no longer lists it (or did not answer this time)."
-                        : "Its source, " + entry.Label + ", is no longer among your sources.";
-                }
-                DrawInstalledRow(package, from, InstalledPackages.UpdateFrom(package, item), flag, item?.Origin?.Theme);
+                (string Text, bool Warning) note = (null, false);
+                if (item == null && catalog != null && !busy) note = InstalledPackages.SourceNote(entry, sourceKeys, profiles, activeProfile);
+                List<VersionChoice> choices = item != null && package.Direct ? VersionChoices.For(item, package.Version, package.GitReference) : new List<VersionChoice>();
+                DrawInstalledRow(package, from, InstalledPackages.UpdateFrom(package, item), note.Text, note.Warning, item?.Origin?.Theme, choices, true, item);
             }
             if (ours.Count == 0) GUILayout.Label("No package of the project comes from your sources.", EditorStyles.centeredGreyMiniLabel);
 
@@ -489,11 +588,14 @@ namespace Glitchr.Store
             foreach (InstalledPackage package in others.Where(p => (showIndirect || p.Direct && !p.Name.StartsWith("com.unity.modules.", StringComparison.Ordinal)) && Matches(p.Name, p.DisplayName)))
             {
                 latestKnown.TryGetValue(package.Name, out string latest);
-                DrawInstalledRow(package, package.Url, InstalledPackages.UpdateTo(package, latest), null, null);
+                List<VersionChoice> choices = package.Direct && package.Source == InstalledPackage.Registry && unityVersions.TryGetValue(package.Name, out string[] known)
+                    ? VersionChoices.ForRegistry(package.Name, known, package.Version)
+                    : new List<VersionChoice>();
+                DrawInstalledRow(package, package.Url, InstalledPackages.UpdateTo(package, latest), null, false, null, choices, false, null);
             }
         }
 
-        private void DrawInstalledRow(InstalledPackage package, string from, PackageUpdate update, string flag, HubTheme theme)
+        private void DrawInstalledRow(InstalledPackage package, string from, PackageUpdate update, string flag, bool warning, HubTheme theme, List<VersionChoice> choices, bool fromSources, HubItem item)
         {
             Rect card = EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             if (theme != null) EditorGUI.DrawRect(new Rect(card.x, card.y, 3, card.height), Accent(theme));
@@ -508,15 +610,79 @@ namespace Glitchr.Store
             if (package.GitDescription != null) detail.Add(package.GitDescription);
             if (!package.Direct && package.Dependents.Count > 0) detail.Add("dependency of " + string.Join(", ", package.Dependents));
             GUILayout.Label(string.Join("  ·  ", detail), EditorStyles.wordWrappedMiniLabel);
-            if (flag != null) EditorGUILayout.HelpBox(flag, MessageType.Warning);
+            if (flag != null) EditorGUILayout.HelpBox(flag, warning ? MessageType.Warning : MessageType.Info);
             using (new EditorGUILayout.HorizontalScope())
             using (new EditorGUI.DisabledScope(busy))
             {
-                if (update != null && GUILayout.Button("Update to " + update.ToVersion, GUILayout.Width(150))) Run("Updating " + package.Label, () => HubInstaller.Apply(new[] { update }));
+                if (update != null && GUILayout.Button("Update to " + update.ToVersion, GUILayout.Width(150))) Run("Updating " + package.Label, progress => HubInstaller.Apply(new[] { update }, null, progress));
+                VersionMenu(package.Name, choices, fromSources, item, update != null ? "▾" : "Other version…");
                 if (package.Direct && GUILayout.Button("Remove", GUILayout.Width(80))) Run("Removing " + package.Label, () => HubInstaller.Remove(package.Name));
                 GUILayout.FlexibleSpace();
+                string packagesFolder = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "Packages");
+                if (PackageSamples.Embeddable(package, packagesFolder) && GUILayout.Button(new GUIContent("Embed", "Copy it into Packages/" + package.Name + " to edit it: part of the project from then on."), GUILayout.Width(70)))
+                {
+                    if (EditorUtility.DisplayDialog("Embed " + package.Label, package.Name + " is copied from Unity's cache into Packages/" + package.Name + ": you can edit it there, it becomes part of the project, and it no longer updates from its source. Remove that folder to go back.", "Embed", "Cancel"))
+                    {
+                        Run("Embedding " + package.Label, () => HubInstaller.Embed(package.Name));
+                    }
+                }
             }
+            DrawSamples(package);
             EditorGUILayout.EndVertical();
+        }
+
+        /// <summary>An installed package's samples (its package.json's), each imported into Assets/Samples as Unity's window does.</summary>
+        private void DrawSamples(InstalledPackage package)
+        {
+            if (!samples.TryGetValue(package.Name, out List<PackageSample> list) || !registeredInfo.TryGetValue(package.Name, out var info)) return;
+            bool unfolded = EditorGUILayout.Foldout(samplesOpen.Contains(package.Name), "Samples (" + list.Count + ")", true);
+            if (unfolded) samplesOpen.Add(package.Name); else samplesOpen.Remove(package.Name);
+            if (!unfolded) return;
+            foreach (PackageSample sample in list)
+            {
+                string folder = PackageSamples.ImportFolder(Application.dataPath, info.displayName, info.version, sample.DisplayName);
+                bool imported = System.IO.Directory.Exists(folder);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.Label(sample.DisplayName + (string.IsNullOrEmpty(sample.Description) ? string.Empty : "  ·  " + sample.Description), EditorStyles.wordWrappedMiniLabel);
+                    using (new EditorGUI.DisabledScope(busy))
+                    {
+                        if (GUILayout.Button(imported ? "Import again" : "Import", GUILayout.Width(100))) ImportSample(package.Name, info, sample, folder, imported);
+                    }
+                }
+            }
+        }
+
+        private void ImportSample(string name, UnityEditor.PackageManager.PackageInfo info, PackageSample sample, string folder, bool imported)
+        {
+            if (imported && !EditorUtility.DisplayDialog("Import " + sample.DisplayName + " again", "Assets/Samples already has it: its files there are replaced (your changes to them are lost).", "Replace", "Cancel")) return;
+            try
+            {
+                // Unity's own Sample when it knows it (Unity's window then shows it imported), else the same copy.
+                var unity = UnityEditor.PackageManager.UI.Sample.FindByPackage(name, info.version).Where(s => s.displayName == sample.DisplayName).ToList();
+                bool done = false;
+                if (unity.Count == 1)
+                {
+                    var replace = UnityEditor.PackageManager.UI.Sample.ImportOptions.OverridePreviousImports;
+                    done = unity[0].Import(imported ? replace : UnityEditor.PackageManager.UI.Sample.ImportOptions.None);
+                    if (!done)
+                    {
+                        // Unity refuses while another version's import is there, as its own window asks.
+                        if (!EditorUtility.DisplayDialog("Previous import", sample.DisplayName + " was imported before from another version: replace that import?", "Replace", "Cancel")) return;
+                        done = unity[0].Import(replace);
+                    }
+                }
+                if (!done)
+                {
+                    PackageSamples.Copy(info.resolvedPath, sample, folder, true);
+                    AssetDatabase.Refresh();
+                }
+                status = sample.DisplayName + " imported into " + folder.Substring(System.IO.Path.GetDirectoryName(Application.dataPath).Length + 1) + ".";
+            }
+            catch (Exception e)
+            {
+                status = sample.DisplayName + ": " + e.Message;
+            }
         }
 
         private void DrawGames()
@@ -541,9 +707,207 @@ namespace Glitchr.Store
             if (catalog.Games.Count == 0 && !busy) GUILayout.Label("No game in these sources.", EditorStyles.centeredGreyMiniLabel);
         }
 
+        /// <summary>
+        /// The user's profiles (the per-user profiles.json Forge Hub shares): the active one, or
+        /// none; each added by its https address or from a file, renamed, read again, exported,
+        /// removed. Then the presets of the project's packages, read only. Switching never changes
+        /// the project.
+        /// </summary>
+        private void DrawProfiles()
+        {
+            if (profilesError != null) EditorGUILayout.HelpBox(profilesError, MessageType.Warning);
+            ProfileStore store = HubSources.Profiles();
+            GUILayout.Label("A profile is a hub people share: a team's or a store's sources, look and licensing, as an address or a file. One is active at a time; switching never changes the project. Your own sources (the Sources tab) stay with every profile.", EditorStyles.wordWrappedMiniLabel);
+            var names = new List<string> { "No profile (only this project's presets and your sources)" };
+            names.AddRange(profiles.Select(p => p.Name.Replace('/', '\u2215')));
+            int current = activeProfile == null ? 0 : profiles.FindIndex(p => p.Id == activeProfile) + 1;
+            using (new EditorGUI.DisabledScope(busy || profilesError != null))
+            {
+                int picked = EditorGUILayout.Popup("Active profile", Math.Max(0, current), names.ToArray());
+                if (picked != current) ProfileAction(() => store.SetActive(picked == 0 ? null : profiles[picked - 1].Id));
+            }
+
+            foreach (ForgeProfile profile in profiles.ToList())
+            {
+                Rect card = EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                if (profile.Theme != null) EditorGUI.DrawRect(new Rect(card.x, card.y, 3, card.height), Accent(profile.Theme));
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (renaming == profile.Id)
+                    {
+                        renameText = EditorGUILayout.TextField(renameText);
+                        if (GUILayout.Button("Save", GUILayout.Width(60)) && !string.IsNullOrWhiteSpace(renameText))
+                        {
+                            string name = renameText;
+                            renaming = null;
+                            ProfileAction(() => store.Rename(profile.Id, name));
+                        }
+                        if (GUILayout.Button("Cancel", GUILayout.Width(60))) renaming = null;
+                    }
+                    else
+                    {
+                        GUILayout.Label(profile.Name + (profile.Id == activeProfile ? "  (active)" : string.Empty), EditorStyles.boldLabel);
+                        GUILayout.FlexibleSpace();
+                    }
+                }
+                int sources = (Json.Array(Json.Get(profile.Hub, "sources")) ?? new List<object>()).Count;
+                string origin = profile.Origin == ForgeProfile.FromUrl ? profile.Url + (profile.RefreshedAt != null ? "  ·  read " + profile.RefreshedAt : string.Empty) : "from a file, added " + profile.AddedAt;
+                GUILayout.Label(origin + "  ·  " + sources + " source" + (sources == 1 ? string.Empty : "s"), EditorStyles.wordWrappedMiniLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                using (new EditorGUI.DisabledScope(busy))
+                {
+                    if (profile.Id != activeProfile && GUILayout.Button("Use", GUILayout.Width(60))) ProfileAction(() => store.SetActive(profile.Id));
+                    if (GUILayout.Button("Rename", GUILayout.Width(70)))
+                    {
+                        renaming = profile.Id;
+                        renameText = profile.Name;
+                    }
+                    if (profile.Origin == ForgeProfile.FromUrl)
+                    {
+                        bool asked = SessionState.GetBool(RefreshedKey + profile.Id, false);
+                        using (new EditorGUI.DisabledScope(asked))
+                        {
+                            if (GUILayout.Button(new GUIContent("Read again", asked ? "Already read (or tried) since Unity started: once per start." : "Reads its address again (once per start); if that fails, the profile as last read stays."), GUILayout.Width(90))) RefreshProfile(profile);
+                        }
+                    }
+                    if (GUILayout.Button(new GUIContent("Export…", "Its hub document, as a file to share: nothing secret is in it."), GUILayout.Width(70)))
+                    {
+                        string path = EditorUtility.SaveFilePanel("Export the profile", string.Empty, ProfileStore.ExportName(profile.Name), "json");
+                        if (!string.IsNullOrEmpty(path))
+                        {
+                            try { status = "Exported to " + store.Export(profile.Id, path) + "."; }
+                            catch (Exception e) { status = "Export: " + e.Message; }
+                        }
+                    }
+                    GUILayout.FlexibleSpace();
+                    if (GUILayout.Button("Remove", GUILayout.Width(70)) && EditorUtility.DisplayDialog("Remove " + profile.Name, "Forget this profile? The project keeps its packages; the ones it gave show as from another profile.", "Remove", "Cancel"))
+                    {
+                        ProfileAction(() => store.Remove(profile.Id));
+                    }
+                }
+                EditorGUILayout.EndVertical();
+            }
+
+            EditorGUILayout.Space();
+            GUILayout.Label("Add a profile", EditorStyles.boldLabel);
+            using (new EditorGUILayout.HorizontalScope())
+            using (new EditorGUI.DisabledScope(busy || profilesError != null))
+            {
+                newProfileUrl = EditorGUILayout.TextField(new GUIContent("Address", "A hub's https address, such as https://owner.github.io/repo/-/hub.json"), newProfileUrl);
+                using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(newProfileUrl)))
+                {
+                    if (GUILayout.Button("Add", GUILayout.Width(60))) AddProfile(newProfileUrl.Trim());
+                }
+            }
+            using (new EditorGUI.DisabledScope(busy || profilesError != null))
+            {
+                if (GUILayout.Button("Add from a file…", GUILayout.Width(150)))
+                {
+                    string path = EditorUtility.OpenFilePanel("A profile (.forge-profile.json, hub.json)", string.Empty, "json");
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        ProfileAction(() =>
+                        {
+                            ForgeProfile added = store.Add(ProfileImport.ReadFile(path), ForgeProfile.FromFile);
+                            if (store.Active == null) store.SetActive(added.Id);
+                            status = "Profile " + added.Name + " added.";
+                        });
+                    }
+                }
+            }
+
+            EditorGUILayout.Space();
+            GUILayout.Label("From this project", EditorStyles.boldLabel);
+            GUILayout.Label("Hubs the project's own packages carry (the \"hub\" section of their package.json): read only, used with any profile; hide one if you do not want it.", EditorStyles.wordWrappedMiniLabel);
+            var hidden = HubSources.Hidden();
+            var presets = HubPresets.Sources();
+            foreach (HubSource preset in presets)
+            {
+                using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
+                {
+                    bool off = hidden.Contains(preset.Url);
+                    GUILayout.Label(preset.Label + "  (from " + preset.Url + ")" + (off ? "  · hidden" : string.Empty), EditorStyles.wordWrappedLabel);
+                    if (GUILayout.Button(off ? "Show" : "Hide", GUILayout.Width(70)))
+                    {
+                        HubSources.SetHidden(preset.Url, !off);
+                        Refresh();
+                        GUIUtility.ExitGUI();
+                    }
+                }
+            }
+            if (presets.Count == 0) GUILayout.Label("No package of this project carries a hub.", EditorStyles.centeredGreyMiniLabel);
+        }
+
+        /// <summary>A change of the profiles file, then the catalogue read again.</summary>
+        private void ProfileAction(Action change)
+        {
+            try
+            {
+                change();
+            }
+            catch (Exception e)
+            {
+                status = e.Message;
+            }
+            ReadProfiles();
+            Refresh();
+            GUIUtility.ExitGUI();
+        }
+
+        private async void AddProfile(string url)
+        {
+            busy = true;
+            status = "Reading " + url + "…";
+            Repaint();
+            try
+            {
+                object hub = await ProfileImport.Fetch(ProfileRefresh.Transport(), url);
+                ProfileStore store = HubSources.Profiles();
+                ForgeProfile added = store.Add(hub, ForgeProfile.FromUrl, url);
+                if (store.Active == null) store.SetActive(added.Id);
+                SessionState.SetBool(RefreshedKey + added.Id, true);
+                newProfileUrl = string.Empty;
+                status = "Profile " + added.Name + " added.";
+            }
+            catch (Exception e)
+            {
+                status = url + ": " + e.Message;
+            }
+            busy = false;
+            ReadProfiles();
+            Refresh();
+        }
+
+        private async void RefreshProfile(ForgeProfile profile)
+        {
+            busy = true;
+            status = "Reading " + profile.Url + "…";
+            Repaint();
+            SessionState.SetBool(RefreshedKey + profile.Id, true); // a failed attempt counts too
+            try
+            {
+                string before = KeyOf(profile.Hub);
+                await ProfileRefresh.Refresh(HubSources.Profiles(), profile);
+                ForgeProfile after = HubSources.Profiles().Get(profile.Id);
+                string hubName = Json.String(Json.Get(after?.Hub, "name"));
+                status = profile.Name + " read again" + (hubName != null && hubName != profile.Name ? " (the hub now calls itself " + hubName + ")" : string.Empty)
+                    + (before != null && before != KeyOf(after?.Hub) ? ". Its licensing key changed: the pinned one stays until you decide." : ".");
+            }
+            catch (Exception e)
+            {
+                status = profile.Name + ": not read again (" + e.Message + "); the profile as last read stays.";
+            }
+            busy = false;
+            ReadProfiles();
+            Refresh();
+        }
+
+        private static string KeyOf(object hub) => Json.String(Json.Get(hub, "licensing", "publicKey"));
+
         private void DrawSources()
         {
-            foreach (HubSource source in HubSources.All())
+            GUILayout.Label("Your own sources, used whatever the profile. Profiles and the project's presets are in the Profiles tab.", EditorStyles.wordWrappedMiniLabel);
+            foreach (HubSource source in HubSources.All().Where(s => s.Type != HubSource.Profile && s.Type != HubSource.Package))
             {
                 using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
                 {
@@ -553,19 +917,6 @@ namespace Glitchr.Store
                     if (GUILayout.Button(source.Type == HubSource.Package ? "Hide" : "Remove", GUILayout.Width(70)))
                     {
                         HubSources.Remove(source);
-                        Refresh();
-                        GUIUtility.ExitGUI();
-                    }
-                }
-            }
-            foreach (string hidden in HubSources.Hidden())
-            {
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    GUILayout.Label("Hidden preset of " + hidden, EditorStyles.miniLabel);
-                    if (GUILayout.Button("Show", GUILayout.Width(70)))
-                    {
-                        HubSources.SetHidden(hidden, false);
                         Refresh();
                         GUIUtility.ExitGUI();
                     }
@@ -672,17 +1023,32 @@ namespace Glitchr.Store
             if (remaining != null) GUILayout.Label("GitHub requests left this hour: " + remaining, EditorStyles.miniLabel);
         }
 
-        private async void Run(string what, Func<System.Threading.Tasks.Task> action)
+        private void Run(string what, Func<System.Threading.Tasks.Task> action)
+        {
+            Run(what, async _ =>
+            {
+                await action();
+
+                return null;
+            });
+        }
+
+        /// <summary>An install or update: its progress line while it runs, then what it added with it.</summary>
+        private async void Run(string what, Func<Action<string>, System.Threading.Tasks.Task<string>> action)
         {
             busy = true;
             status = what + "…";
             Repaint();
             try
             {
-                await action();
+                string note = await action(line =>
+                {
+                    status = line;
+                    Repaint();
+                });
                 installed = await HubInstaller.Installed();
                 ReadProject();
-                status = what + ": done.";
+                status = what + ": done." + (note != null ? "\n" + note : string.Empty);
             }
             catch (Exception e)
             {

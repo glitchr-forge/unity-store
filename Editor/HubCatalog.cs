@@ -26,6 +26,9 @@ namespace Glitchr.Store
         public string GitUrl;
         /// <summary>A package of a GitHub source: its repository, visibility and tags.</summary>
         public GitHubPackage GitHub;
+        /// <summary>A Git package: its package.json's dependencies, when already read (at <see cref="DependenciesReference"/>; null for the default branch).</summary>
+        public Dictionary<string, string> Dependencies;
+        public string DependenciesReference;
 
         public string Label => string.IsNullOrEmpty(DisplayName) ? Name : DisplayName;
     }
@@ -75,9 +78,12 @@ namespace Glitchr.Store
         public List<string> Errors = new List<string>();
         public string Brand;
         public string Color;
-        /// <summary>The window's header: the first theme a preset's hub declared, else the first any hub declared.</summary>
+        /// <summary>The window's header: the active profile's theme, else the first a preset's hub declared, else the first any hub declared.</summary>
         public HubTheme Theme;
         public bool ThemeFromPreset;
+        public bool ThemeFromProfile;
+        /// <summary>The active profile's name, shown in the header even when its hub has no theme.</summary>
+        public string Profile;
         /// <summary>The licensing keys the hubs announced, each checked against its pin.</summary>
         public List<HubLicensing> Licensing = new List<HubLicensing>();
     }
@@ -152,6 +158,11 @@ namespace Glitchr.Store
                     {
                         case HubSource.Manifest: await ReadManifest(source, result, GitHub); break;
                         case HubSource.Package: await ReadHub(HubPresets.Read(source.Url), source, result, GitHub, StoreId(HubSource.Package, source.Url)); break;
+                        case HubSource.Profile:
+                            ForgeProfile profile = HubSources.Profiles().Get(source.Url) ?? throw new Exception("this profile is no longer in your profiles.");
+                            result.Profile ??= profile.Name;
+                            await ReadHub(profile.Hub, source, result, GitHub, profile.StoreId);
+                            break;
                         case HubSource.GitHub:
                             await ReadGitHub(GitHub(), source.Owner, source.Pattern, new HubOrigin { Source = source, HubName = source.Label }, result);
                             break;
@@ -222,6 +233,7 @@ namespace Glitchr.Store
                     Page = package.Page,
                     GitUrl = package.GitUrl,
                     GitHub = package,
+                    Dependencies = package.Dependencies,
                     Origin = origin,
                     Versions = package.Tags.Select(t => new HubVersion { Version = t }).ToList(),
                 });
@@ -247,24 +259,11 @@ namespace Glitchr.Store
         /// </summary>
         public static string PackageJsonUrl(string gitUrl)
         {
-            if (string.IsNullOrEmpty(gitUrl)) return null;
-            string rest = gitUrl.Trim(), reference = null, folder = null;
-            int hash = rest.IndexOf('#');
-            if (hash >= 0) { reference = rest.Substring(hash + 1); rest = rest.Substring(0, hash); }
-            int path = rest.IndexOf("?path=", StringComparison.Ordinal);
-            if (path >= 0) { folder = rest.Substring(path + 6).Trim('/'); rest = rest.Substring(0, path); }
-            string repo = null;
-            foreach (string prefix in new[] { "https://github.com/", "git@github.com:", "ssh://git@github.com/", "git+https://github.com/" })
-            {
-                if (rest.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) repo = rest.Substring(prefix.Length);
-            }
+            GitHubRepository repo = GitHubRepository.Of(gitUrl);
             if (repo == null) return null;
-            repo = repo.TrimEnd('/');
-            if (repo.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) repo = repo.Substring(0, repo.Length - 4);
-            if (repo.Split('/').Length != 2) return null;
 
-            return "https://raw.githubusercontent.com/" + repo + "/" + (string.IsNullOrEmpty(reference) ? "HEAD" : reference) + "/"
-                + (string.IsNullOrEmpty(folder) ? string.Empty : folder + "/") + "package.json";
+            return "https://raw.githubusercontent.com/" + repo.Owner + "/" + repo.Name + "/" + (string.IsNullOrEmpty(repo.Reference) ? "HEAD" : repo.Reference) + "/"
+                + (string.IsNullOrEmpty(repo.Folder) ? string.Empty : repo.Folder + "/") + "package.json";
         }
 
         /// <summary>
@@ -288,6 +287,8 @@ namespace Glitchr.Store
             item.DisplayName = string.IsNullOrEmpty(label) ? Json.String(Json.Get(package, "displayName")) ?? url : label;
             item.Description = Json.String(Json.Get(package, "description")) ?? url;
             item.Version = Json.String(Json.Get(package, "version"));
+            item.Dependencies = GitDependencies.Of(package);
+            item.DependenciesReference = GitHubRepository.Of(url)?.Reference;
             object hub = Json.Get(package, "hub");
 
             return Json.Object(hub) != null ? hub : null;
@@ -299,11 +300,12 @@ namespace Glitchr.Store
             HubTheme theme = HubTheme.Of(manifest);
             result.Brand ??= name;
             result.Color ??= Json.String(Json.Get(manifest, "color"));
-            bool preset = source.Type == HubSource.Package;
-            if (theme != null && (result.Theme == null || preset && !result.ThemeFromPreset))
+            bool preset = source.Type == HubSource.Package, profile = source.Type == HubSource.Profile;
+            if (theme != null && !result.ThemeFromProfile && (result.Theme == null || profile || preset && !result.ThemeFromPreset))
             {
                 result.Theme = theme;
                 result.ThemeFromPreset = preset;
+                result.ThemeFromProfile = profile;
             }
             HubLicensing licensing = HubLicensing.Of(manifest, store, name);
             if (licensing != null && result.Licensing.All(l => l.Store != store)) result.Licensing.Add(licensing);

@@ -22,6 +22,8 @@ namespace Glitchr.Store
         public const string GitHub = "github";
         /// <summary>A preset: the "hub" section of a package installed in the project (Url is its name).</summary>
         public const string Package = "package";
+        /// <summary>The active profile of the user's profiles.json (Url is its id).</summary>
+        public const string Profile = "profile";
 
         public string Type = Manifest;
         public string Name;
@@ -61,13 +63,30 @@ namespace Glitchr.Store
             public List<HubSource> Sources = new List<HubSource>();
         }
 
-        /// <summary>The user's sources, then the presets of the project's packages that are not hidden.</summary>
+        /// <summary>The user's profiles file (injectable: tests use their own).</summary>
+        public static Func<ProfileStore> Profiles = () => new ProfileStore();
+
+        /// <summary>The active profile, then the user's own sources, then the presets of the project's packages that are not hidden.</summary>
         public static List<HubSource> All()
         {
-            var all = User();
+            ForgeProfile active = null;
+            try { active = Profiles().ActiveProfile; }
+            catch (Exception) { /* a damaged profiles file: no profile, the window says so */ }
+
+            return Compose(active, User(), HubPresets.Sources(), Hidden());
+        }
+
+        /// <summary>
+        /// What the catalogue reads, in order: the active profile (none when null), the sources the
+        /// user added by hand (kept whatever the profile), the project's presets that are not hidden.
+        /// </summary>
+        public static List<HubSource> Compose(ForgeProfile active, IEnumerable<HubSource> user, IEnumerable<HubSource> presets, ICollection<string> hidden)
+        {
+            var all = new List<HubSource>();
+            if (active != null) all.Add(active.Source);
             var keys = new HashSet<string>(all.Select(s => s.Key));
-            var hidden = Hidden();
-            all.AddRange(HubPresets.Sources().Where(p => !hidden.Contains(p.Url) && keys.Add(p.Key)));
+            all.AddRange(user.Where(s => s.Type != HubSource.Profile && keys.Add(s.Key)));
+            all.AddRange(presets.Where(p => !hidden.Contains(p.Url) && keys.Add(p.Key)));
 
             return all;
         }
@@ -83,7 +102,7 @@ namespace Glitchr.Store
 
         public static void Save(List<HubSource> sources)
         {
-            EditorPrefs.SetString(Key, UnityEngine.JsonUtility.ToJson(new Saved { Sources = sources.Where(s => s.Type != HubSource.Package).ToList() }));
+            EditorPrefs.SetString(Key, UnityEngine.JsonUtility.ToJson(new Saved { Sources = sources.Where(s => s.Type != HubSource.Package && s.Type != HubSource.Profile).ToList() }));
         }
 
         public static void Add(HubSource source)

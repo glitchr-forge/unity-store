@@ -235,6 +235,49 @@ namespace Glitchr.Store
             return new PackageUpdate { Name = package.Name, Identifier = package.Name + "@" + latestCompatible, ToVersion = latestCompatible };
         }
 
+        /// <summary>
+        /// What the Installed tab says of a package Forge Store installed that no source offers
+        /// now: a profile's that is not active ("from profile Name"), the active profile's or a
+        /// source's that no longer lists it, a source the user removed. The flag is a warning only
+        /// when something is wrong; another profile's package is information.
+        /// </summary>
+        public static (string Text, bool Warning) SourceNote(InstallRecord.Entry entry, ICollection<string> sourceKeys, IEnumerable<ForgeProfile> profiles, string activeProfile)
+        {
+            if (entry == null) return (null, false);
+            var all = (profiles ?? Enumerable.Empty<ForgeProfile>()).ToList();
+            string prefix = HubSource.Profile + ":";
+            if (entry.Source != null && entry.Source.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                string id = entry.Source.Substring(prefix.Length);
+                ForgeProfile profile = all.FirstOrDefault(p => p.Id == id);
+                if (id == activeProfile) return ("Its profile, " + (profile?.Name ?? entry.Label) + ", no longer lists it (or did not answer this time).", true);
+                if (profile != null) return ("From profile " + profile.Name + ", not the active one.", false);
+
+                return ("From another profile" + (string.IsNullOrEmpty(entry.Label) ? string.Empty : " (" + entry.Label + ", since removed)") + ".", false);
+            }
+            if (sourceKeys != null && sourceKeys.Contains(entry.Source)) return ("Its source, " + entry.Label + ", no longer lists it (or did not answer this time).", true);
+            // A source of 1.3.0 that a profile now carries: that profile's, whether active or not.
+            ForgeProfile carrier = all.FirstOrDefault(p => p.Id != activeProfile && Carries(p, entry.Source));
+            if (carrier != null) return ("From profile " + carrier.Name + ", not the active one.", false);
+
+            return ("Its source, " + entry.Label + ", is no longer among your sources.", true);
+        }
+
+        /// <summary>Whether a profile is, or lists, the source of that key (its own URL as a manifest, or one of its hub's sources).</summary>
+        public static bool Carries(ForgeProfile profile, string sourceKey)
+        {
+            if (profile == null || string.IsNullOrEmpty(sourceKey)) return false;
+            if (profile.Url != null && new HubSource { Type = HubSource.Manifest, Url = profile.Url }.Key == sourceKey) return true;
+            foreach (object entry in Json.Array(Json.Get(profile.Hub, "sources")) ?? new List<object>())
+            {
+                string type = Json.String(Json.Get(entry, "type")) ?? HubSource.Upm;
+                var source = new HubSource { Type = type, Url = Json.String(Json.Get(entry, "url")), Owner = Json.String(Json.Get(entry, "owner")), Pattern = Json.String(Json.Get(entry, "pattern")) };
+                if (source.Key == sourceKey) return true;
+            }
+
+            return false;
+        }
+
         private static string Major(string version) => (version ?? string.Empty).Split('.', '-')[0];
     }
 

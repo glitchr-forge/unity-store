@@ -19,6 +19,8 @@ namespace Glitchr.Store
         public string Description;
         /// <summary>The version of the package.json on the default branch.</summary>
         public string Version;
+        /// <summary>The package.json's dependencies on the default branch.</summary>
+        public Dictionary<string, string> Dependencies;
         /// <summary>The repository's tags, newest version first.</summary>
         public List<string> Tags = new List<string>();
 
@@ -167,6 +169,7 @@ namespace Glitchr.Store
                         DisplayName = Json.String(Json.Get(json, "displayName")),
                         Description = Json.String(Json.Get(json, "description")) ?? Json.String(Json.Get(repo, "description")),
                         Version = Json.String(Json.Get(json, "version")),
+                        Dependencies = GitDependencies.Of(json),
                     };
                     GitHubApi.Answer tags = await api.Get("/repos/" + login + "/" + name + "/tags?per_page=100");
                     if (tags.Ok) found.Tags = SortTags((Json.Array(tags.Json) ?? new List<object>()).Select(t => Json.String(Json.Get(t, "name"))));
