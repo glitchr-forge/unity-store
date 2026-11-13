@@ -211,6 +211,14 @@ namespace Glitchr.Store
             return read;
         }
 
+        /// <summary>
+        /// "This machine's licence id": what a seller needs to bind an offline licence to one
+        /// machine (omnihub licence sign --machine-hash). Exactly the value <see cref="Verify"/>
+        /// compares with a licence's <c>machine</c> - the hash only, never the raw identifier. Not
+        /// a secret, but personal: shown on demand.
+        /// </summary>
+        public static string MachineLicenceId(string identifier) => MachineHash(identifier);
+
         /// <summary>The machine as a licence names it: SHA-256 (hex) of its trimmed identifier, as Forge Seal and the Forge compute it.</summary>
         public static string MachineHash(string identifier)
         {
@@ -270,6 +278,76 @@ namespace Glitchr.Store
             }
 
             return best?.Trim().TrimEnd('/');
+        }
+    }
+
+    /// <summary>A package a static hub sells with a licence its author signs offline: its hub.json's <c>"licensed": [{"package", "get"}]</c>.</summary>
+    public sealed class LicensedPackage
+    {
+        public string Package;
+        /// <summary>Where a licence is bought, as the hub gives it (only ever opened in a browser, and only when https).</summary>
+        public string Get;
+
+        /// <summary>The hub's <c>licensed</c> member, or null when it has none (an older hub: it cannot tell paid from free).</summary>
+        public static List<LicensedPackage> ListOf(object hub)
+        {
+            List<object> entries = Json.Array(Json.Get(hub, "licensed"));
+            if (entries == null) return null;
+
+            return entries.Select(e => new LicensedPackage { Package = Json.String(Json.Get(e, "package"))?.Trim(), Get = Json.String(Json.Get(e, "get"))?.Trim() })
+                .Where(p => !string.IsNullOrEmpty(p.Package)).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Where Forge Store offers "Enter a licence": a package of a store that publishes a key and
+    /// sells nothing in the window (a static hub), served by the store's own registry - the one its
+    /// <c>licensing.registry</c> names, when it names one, since its licences name no other. When
+    /// the hub publishes <c>licensed</c>, only the packages it lists, each with its "Get" link;
+    /// without it (an older hub), every such package.
+    /// </summary>
+    public sealed class LicenceOffer
+    {
+        public HubLicensing Licensing;
+        /// <summary>The hub's "get" link for the package, unchecked (see <see cref="GetRefusal"/>); null when it gives none.</summary>
+        public string Get;
+        /// <summary>The hub named the package in its <c>licensed</c> list (false: an older hub without one).</summary>
+        public bool Listed;
+
+        public static LicenceOffer For(HubItem item, IEnumerable<HubLicensing> licensing)
+        {
+            HubOrigin origin = item?.Origin;
+            if (origin == null || origin.Sells || !string.IsNullOrEmpty(item.GitUrl) || item.GitHub != null
+                || string.IsNullOrEmpty(origin.Registry) || string.IsNullOrEmpty(origin.Store)) return null;
+            HubLicensing announced = licensing?.FirstOrDefault(l => l.Store == origin.Store);
+            if (announced == null) return null;
+            // Another registry the hub lists (OpenUPM, say): the hub's licences never name it.
+            if (!string.IsNullOrEmpty(announced.Registry) && !LicenceCheck.SameRegistry(announced.Registry, origin.Registry)) return null;
+            if (announced.Licensed == null) return new LicenceOffer { Licensing = announced };
+            LicensedPackage listed = announced.Licensed.FirstOrDefault(p => p.Package == item.Name);
+
+            return listed == null ? null : new LicenceOffer { Licensing = announced, Get = string.IsNullOrEmpty(listed.Get) ? null : listed.Get, Listed = true };
+        }
+
+        /// <summary>Why a "get" link is not opened, or null when it may be: an absolute https address with a host and no user name in it. Nothing else is ever done with it.</summary>
+        public static string GetRefusal(string link)
+        {
+            if (string.IsNullOrWhiteSpace(link)) return "the store gives no link to get a licence: nothing opened.";
+            if (!Uri.TryCreate(link.Trim(), UriKind.Absolute, out Uri uri) || string.IsNullOrEmpty(uri.Host)) return "the store's link to get a licence (" + link.Trim() + ") is not a web address: not opened.";
+            if (uri.Scheme != Uri.UriSchemeHttps) return "the store's link to get a licence is not https (" + uri.Scheme + ":): Forge Store opens https links only, so it was not opened.";
+            if (!string.IsNullOrEmpty(uri.UserInfo)) return "the store's link to get a licence carries a user name before its host (" + uri.Host + "): not opened.";
+
+            return null;
+        }
+
+        /// <summary>The "get" link opened through <paramref name="open"/> (the browser) when <see cref="GetRefusal"/> lets it; false with the reason otherwise.</summary>
+        public static bool OpenGet(string link, Action<string> open, out string refusal)
+        {
+            refusal = GetRefusal(link);
+            if (refusal != null) return false;
+            open(new Uri(link.Trim(), UriKind.Absolute).AbsoluteUri);
+
+            return true;
         }
     }
 

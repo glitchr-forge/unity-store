@@ -80,7 +80,11 @@ package hubs and installs their packages in the open project in one click:
   through a link of their own, the buyer pastes the licence on the package
   (**Enter a licence**): checked, then kept for that user outside the project
   (`Forge Store/licences.json`), shown with its licensee and validity,
-  removable; the package checks it with Forge Seal. See
+  removable; the package checks it with Forge Seal. A hub that lists what it
+  sells (`licensed` in its hub.json) gets the field on those packages only,
+  with a **Get** button to its shop (https links only); its other packages
+  are free. **This machine's licence id**, shown on demand next to the
+  field, is what a seller needs to bind a licence to one machine. See
   [docs/licences.md](docs/licences.md).
 
 Requires Unity 2021.3 or later. Editor only: nothing of it goes into a build.
@@ -91,7 +95,7 @@ From Git, in `Packages/manifest.json`:
 
 ```json
 "dependencies": {
-  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.5.0"
+  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.6.0"
 }
 ```
 
@@ -106,7 +110,7 @@ old one replaces it by a one-line change in `Packages/manifest.json`:
 
 ```diff
 -  "io.glitchr.hub": "...",
-+  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.5.0",
++  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.6.0",
 ```
 
 When both are there, the window shows a notice with a button that removes
@@ -147,7 +151,9 @@ the file shared with Forge Hub: another app's decision seen at once, its
 fields kept, a file caught mid-write), licences (the previous key's bound,
 the binding to registry and package with a Forge's format 2 token and a
 format 1 one, a static hub's offline licences signed by `omnihub licence
-sign`, the per-user licences file) with real Ed25519 signatures,
+sign`, the per-user licences file, a hub's `licensed` list and its Get links,
+this machine's licence id, a manifest `omnihub build` wrote) with real
+Ed25519 signatures,
 the images' cache (PNG and JPEG only, bounded), the profiles file (on a
 temporary file, never the user's: unknown fields kept, secrets out, addresses
 and redirects checked, refresh), the version menu, a Git package's Git

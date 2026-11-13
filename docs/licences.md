@@ -81,9 +81,52 @@ seller signs it again with the new key and the buyer pastes the new one.
 
 ## A static hub's licences, pasted
 
-On a package of a store that publishes a key and sells nothing in the window
-(a static hub), the Packages tab and the Installed tab show **Enter a
-licence**: the buyer pastes the token the seller sent, **Check and keep**
+### Which packages take a licence: `licensed`
+
+A static hub has no catalogue, so its hub.json says what it sells (omnihub
+writes it from `hub.yaml`, only beside `licensing`):
+
+```json
+"licensing": {"publicKey": "<base64>", "registry": "https://owner.github.io/hub"},
+"licensed": [{"package": "com.example.tool", "get": "https://shop.example.org/buy/tool"},
+             {"package": "com.example.kit"}]
+```
+
+- On a store that publishes `licensed`, **Enter a licence** shows on the
+  packages it lists only (Packages and Installed tabs alike); the others are
+  free and show no licence field. An empty list: the store sells nothing.
+- A listed package with a `get` link gets a **Get** button: the link opens in
+  the browser, and the licence field and this machine's licence id unfold
+  for the seller's form. The link is used for nothing else, and only when it
+  is an absolute `https://` address without a user name before its host;
+  any other (`http:`, `javascript:`, `file:`, a relative path...) is not
+  opened and the window says why.
+- A store that publishes a key but no `licensed` (an older hub) keeps
+  Forge Store 1.5.0's behaviour: the field on every package of its registry.
+- `licensing.registry`, when given (omnihub writes the hub's `sources[0].url`),
+  is the store's own registry: the field is offered only on packages of that
+  registry, never on those of another registry the hub lists (OpenUPM, say),
+  which its licences cannot name. The registry a licence is checked against
+  stays the one the project installed the package from (else the item's).
+- A Forge is not concerned: it sells through its checkout, its activated
+  licences arrive by themselves.
+
+### This machine's licence id
+
+For a licence bound to one machine, the seller needs the buyer's machine: under
+Enter a licence, **This machine's licence id** (a foldout, shown on demand)
+gives it with **Copy** - 64 lowercase hex digits, the SHA-256 of Unity's
+`SystemInfo.deviceUniqueIdentifier` trimmed, in UTF-8: exactly what the
+check above compares with a licence's `machine`, what Forge Seal's
+`PackageLicence` compares, and what `omnihub licence sign --machine-hash`
+takes as given (`--machine <identifier>` hashes the raw identifier the same
+way; on macOS Unity reports it in uppercase). It is not a secret - it opens
+nothing by itself - and the raw identifier is never shown. Without it, the
+seller signs a licence that opens on any machine. `StoreTrust.MachineLicenceId`.
+
+### Pasting it
+
+The buyer pastes the token the seller sent (one line), **Check and keep**
 checks it as above - against the store's pinned key, the registry the
 package comes from (or would come from) and the package's name - and keeps
 it. A kept licence shows its licensee and its validity ("no end", or "until"

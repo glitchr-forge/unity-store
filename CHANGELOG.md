@@ -4,6 +4,39 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-11-13
+
+### Added
+
+- What a static hub sells: its hub.json's `licensed`
+  (`[{"package": <UPM name>, "get": <https address, optional>}]`, written by
+  omnisense/omnihub with `licensing`) is read with the hub's key
+  (`HubLicensing.Licensed`, `LicensedPackage`). On a store that publishes it,
+  **Enter a licence** shows only on the packages it lists, in the Packages
+  and Installed tabs alike, and those with a `get` link get a **Get** button
+  that opens it in the browser - an absolute https address only (no user
+  name before the host); any other link is not opened and the window says
+  why. The packages it does not list are free: no licence field. A store
+  that publishes a key but no `licensed` keeps 1.5.0's behaviour (the field
+  on every package of its registry). `LicenceOffer.For(item, licensing)`,
+  `LicenceOffer.GetRefusal`, `LicenceOffer.OpenGet`.
+- **This machine's licence id**, a foldout under Enter a licence (opened by
+  Get too): the SHA-256 hex of Unity's `SystemInfo.deviceUniqueIdentifier`,
+  exactly what the licence check compares with a licence's `machine` (and
+  what omnihub's `licence sign --machine` writes), with **Copy**, for a
+  seller who binds a licence to one machine (`--machine-hash`). The hash
+  only, never the raw identifier; shown on demand. `StoreTrust.MachineLicenceId`,
+  `LicenceCheck.MachineLicenceId(identifier)`.
+
+### Changed
+
+- `licensing.registry`, when the hub gives it, names the store's own
+  registry: the licence field is offered only on the packages of that
+  registry, not on those of another registry the hub lists (OpenUPM, say),
+  whose packages its licences can never name. The registry a licence is
+  checked against is unchanged (the one the project installed the package
+  from, else the item's), and a Forge's licences are untouched.
+
 ## [1.5.0] - 2026-11-13
 
 ### Added

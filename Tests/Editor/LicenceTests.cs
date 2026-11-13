@@ -400,6 +400,189 @@ namespace Glitchr.Store.Tests
             Assert.IsFalse(Path.GetFullPath(user).StartsWith(Path.GetFullPath(Directory.GetCurrentDirectory()), StringComparison.Ordinal), "never in the project");
         }
 
+        // 5. What a static hub sells ("licensed"), its "Get" link, this machine's licence id.
+
+        // omnihub 92cf0a3's own output (PHP 8.5, composer:2 in Docker, no network), a throwaway key
+        // whose private half was deleted: `omnihub build hub.yaml _site --strict` of a hub that lists
+        // com.example.tool (with a get link) and com.example.kit in `licensed`, and OpenUPM as a second
+        // source; `licence sign --hub hub.yaml --package com.example.tool` for "Ada Example
+        // <ada@example.org>" (any machine) and for "Grace" with `--machine
+        // 0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9` (an identifier in the uppercase form Unity reports on
+        // macOS), both issued at 1792972800, no end.
+        private const string BuiltHub = "{\"version\":1,\"name\":\"Example Studio\",\"licensing\":{\"publicKey\":\"TldU0sTSnHbqAq1SE4imGG/s+5gpxsbKdz4d+7otmdE=\",\"registry\":\"https://example.github.io/hub\"},\"licensed\":[{\"package\":\"com.example.tool\",\"get\":\"https://shop.example.org/buy/tool\"},{\"package\":\"com.example.kit\"}],\"sources\":[{\"name\":\"Example Studio\",\"type\":\"upm\",\"url\":\"https://example.github.io/hub\",\"scopes\":[\"com.example\"]},{\"name\":\"OpenUPM\",\"type\":\"upm\",\"url\":\"https://package.openupm.com\",\"scopes\":[\"com.cysharp.unitask\"]}]}";
+        private const string BuiltAnyMachine = "eyJ2IjoyLCJyZWdpc3RyeSI6Imh0dHBzOi8vZXhhbXBsZS5naXRodWIuaW8vaHViIiwicGFja2FnZSI6ImNvbS5leGFtcGxlLnRvb2wiLCJsaWNlbnNlZSI6IkFkYSBFeGFtcGxlIDxhZGFAZXhhbXBsZS5vcmc-IiwiaXNzdWVkX2F0IjoxNzkyOTcyODAwfQ.imoT1aA3uVfH6LEMEHX_JYUMHV1PCe3LXT63fZSDSU2QzaU7gWq03HaMgqIjL80ooZZNIyyPSV2hg5jYhDGOAQ";
+        private const string BuiltOneMachine = "eyJ2IjoyLCJyZWdpc3RyeSI6Imh0dHBzOi8vZXhhbXBsZS5naXRodWIuaW8vaHViIiwicGFja2FnZSI6ImNvbS5leGFtcGxlLnRvb2wiLCJsaWNlbnNlZSI6IkdyYWNlIiwibWFjaGluZSI6ImQ3ZDEzNTNmYmM2NDU1MmJiYjBjOTI2MTIwYzZiY2FmY2FlYzNmZjljMTc3NjU0MDI5OWMyZGY4YmQ2MTNjNDUiLCJpc3N1ZWRfYXQiOjE3OTI5NzI4MDB9.o7Zj_7ndPIfRrePw2cDqPoxfGz8K3bzDqrTxTlUaW3dz9mSaQHVBLd_PyNMo2CYfTGyBQ5dqvescIqIDJxkvBA";
+        private const string BuiltMachine = "0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9";
+
+        /// <summary>The items a hub's upm sources give, as the catalogue reader builds their origin (its registry, the hub's store).</summary>
+        private static List<HubItem> ItemsOf(object hub, string store, params string[] names)
+        {
+            var items = new List<HubItem>();
+            foreach (object source in Json.Array(Json.Get(hub, "sources")))
+            {
+                var origin = new HubOrigin { HubName = Json.String(Json.Get(hub, "name")), Registry = Json.String(Json.Get(source, "url")).TrimEnd('/'), Store = store,
+                    Scopes = Json.Array(Json.Get(source, "scopes")).OfType<string>().ToList() };
+                foreach (string name in names.Where(n => origin.Scopes.Any(s => n.StartsWith(s, StringComparison.Ordinal))))
+                {
+                    items.Add(new HubItem { Name = name, Version = "1.0.0", Origin = origin });
+                }
+            }
+
+            return items;
+        }
+
+        private static LicenceOffer OfferFor(string hubJson, string package, string store = HubStore)
+        {
+            object hub = Json.Parse(hubJson);
+            HubLicensing licensing = HubLicensing.Of(hub, store, "Example");
+            HubItem item = ItemsOf(hub, store, package).Single();
+
+            return LicenceOffer.For(item, licensing == null ? new List<HubLicensing>() : new List<HubLicensing> { licensing });
+        }
+
+        [Test]
+        public void AHubsLicensedListDecidesWhichPackagesTakeALicence()
+        {
+            string Hub(string licensed, string licensing = "{\"publicKey\":\"" + HubKey + "\"}") => "{\"name\":\"Example\"," + (licensing == null ? string.Empty : "\"licensing\":" + licensing + ",")
+                + (licensed == null ? string.Empty : "\"licensed\":" + licensed + ",") + "\"sources\":[{\"type\":\"upm\",\"url\":\"" + HubRegistry + "/\",\"scopes\":[\"com.example\"]}]}";
+            const string list = "[{\"package\":\"com.example.tool\",\"get\":\"https://shop.example.org/tool\"},{\"package\":\"com.example.kit\"}]";
+
+            // A store with a key and a "licensed" list: the listed packages only, with their link.
+            LicenceOffer tool = OfferFor(Hub(list), "com.example.tool");
+            Assert.IsNotNull(tool);
+            Assert.IsTrue(tool.Listed);
+            Assert.AreEqual("https://shop.example.org/tool", tool.Get);
+            LicenceOffer kit = OfferFor(Hub(list), "com.example.kit");
+            Assert.IsNotNull(kit, "listed without a link: the field, no Get");
+            Assert.IsNull(kit.Get);
+            Assert.IsNull(OfferFor(Hub(list), "com.example.free"), "not listed: free, no licence field");
+            Assert.IsNull(OfferFor(Hub("[]"), "com.example.tool"), "an empty list: the store sells nothing");
+
+            // A key but no list (an older hub): every package of the store, as Forge Store 1.5.0 did.
+            LicenceOffer older = OfferFor(Hub(null), "com.example.free");
+            Assert.IsNotNull(older);
+            Assert.IsFalse(older.Listed);
+            Assert.IsNull(older.Get);
+
+            // No key: nothing to check a licence with, whatever the list says.
+            Assert.IsNull(OfferFor(Hub(list, licensing: null), "com.example.tool"));
+            Assert.IsNull(HubLicensing.Of(Json.Parse(Hub(list, licensing: null)), HubStore, "Example"));
+
+            // Malformed entries are dropped, not guessed.
+            List<LicensedPackage> read = LicensedPackage.ListOf(Json.Parse("{\"licensed\":[{\"get\":\"https://x.example\"},\"com.example.tool\",{\"package\":\" com.example.kit \"}]}"));
+            Assert.AreEqual(new[] { "com.example.kit" }, read.Select(p => p.Package).ToArray());
+            Assert.IsNull(LicensedPackage.ListOf(Json.Parse("{\"licensed\":\"com.example.tool\"}")), "not a list: as if absent");
+
+            // A Forge sells through its checkout, a Git package has no registry to bind to: never the field.
+            var forge = new HubOrigin { Registry = Registry, Store = Store, DeviceUrl = "https://forge.example.com/device", TokenUrl = "https://forge.example.com/token" };
+            var forgeLicensing = new List<HubLicensing> { new HubLicensing { Store = Store, PublicKey = OldKey, Registry = Registry, Licensed = new List<LicensedPackage> { new LicensedPackage { Package = Package } } } };
+            Assert.IsNull(LicenceOffer.For(new HubItem { Name = Package, Origin = forge }, forgeLicensing));
+            var plain = new HubOrigin { Registry = HubRegistry, Store = HubStore };
+            Assert.IsNull(LicenceOffer.For(new HubItem { Name = Package, GitUrl = "https://github.com/example-org/unity-tool.git", Origin = plain }, new List<HubLicensing> { HubLicensing.Of(Json.Parse(Hub(list)), HubStore, "Example") }));
+        }
+
+        [Test]
+        public void TheManifestOmnihubBuiltOffersTheLicenceInTheCatalogueAndTheInstalledTabAlike()
+        {
+            object hub = Json.Parse(BuiltHub);
+            HubLicensing licensing = HubLicensing.Of(hub, HubStore, "Example Studio");
+            Assert.AreEqual("https://example.github.io/hub", licensing.Registry, "licensing.registry, the build's sources[0].url");
+            Assert.AreEqual(Json.String(Json.Get(Json.Array(Json.Get(hub, "sources"))[0], "url")), licensing.Registry);
+            Assert.AreEqual(new[] { "com.example.tool", "com.example.kit" }, licensing.Licensed.Select(p => p.Package).ToArray());
+            var all = new List<HubLicensing> { licensing };
+
+            List<HubItem> items = ItemsOf(hub, HubStore, "com.example.tool", "com.example.kit", "com.example.free", "com.cysharp.unitask");
+            Assert.AreEqual(4, items.Count);
+            Assert.AreEqual("https://shop.example.org/buy/tool", LicenceOffer.For(items.Single(i => i.Name == "com.example.tool"), all).Get);
+            Assert.IsNotNull(LicenceOffer.For(items.Single(i => i.Name == "com.example.kit"), all));
+            Assert.IsNull(LicenceOffer.For(items.Single(i => i.Name == "com.example.free"), all), "free");
+            Assert.IsNull(LicenceOffer.For(items.Single(i => i.Name == "com.cysharp.unitask"), all), "OpenUPM, the hub's second source: its licences never name that registry");
+            licensing.Licensed = null;
+            Assert.IsNull(LicenceOffer.For(items.Single(i => i.Name == "com.cysharp.unitask"), all), "even without a list, once licensing.registry says which registry is the hub's");
+            Assert.IsNotNull(LicenceOffer.For(items.Single(i => i.Name == "com.example.free"), all));
+            licensing.Licensed = LicensedPackage.ListOf(hub);
+
+            // The Installed tab: the installed package's offer is the same item, so the same field.
+            const string manifest = "{\"dependencies\":{\"com.example.tool\":\"1.0.0\",\"com.example.free\":\"1.0.0\"},\"scopedRegistries\":[{\"name\":\"Example Studio\",\"url\":\"https://example.github.io/hub\",\"scopes\":[\"com.example\"]}]}";
+            const string lockFile = "{\"dependencies\":{\"com.example.tool\":{\"version\":\"1.0.0\",\"depth\":0,\"source\":\"registry\",\"dependencies\":{},\"url\":\"https://example.github.io/hub\"},"
+                + "\"com.example.free\":{\"version\":\"1.0.0\",\"depth\":0,\"source\":\"registry\",\"dependencies\":{},\"url\":\"https://example.github.io/hub\"}}}";
+            Dictionary<string, InstalledPackage> installed = InstalledPackages.Read(manifest, lockFile).ToDictionary(p => p.Name);
+            HubItem toolOffer = InstalledPackages.Offer(installed["com.example.tool"], items);
+            Assert.AreSame(items.Single(i => i.Name == "com.example.tool"), toolOffer);
+            Assert.AreEqual("https://shop.example.org/buy/tool", LicenceOffer.For(toolOffer, all).Get);
+            Assert.IsNull(LicenceOffer.For(InstalledPackages.Offer(installed["com.example.free"], items), all), "free there too");
+
+            // The licence its seller signed opens it: pinned from that manifest, bound to the registry the project installed it from.
+            var pins = new KeyPins(path, Ed25519) { Clock = () => T0 };
+            Assert.AreEqual(KeyCheck.Pinned, pins.Observe(licensing));
+            string registry = LicenceCheck.InstalledRegistry(manifest, lockFile, "com.example.tool");
+            LicenceToken any = Check(pins, BuiltAnyMachine, out string reason, registry, store: HubStore, machine: "anything");
+            Assert.IsNotNull(any, reason);
+            Assert.AreEqual("Ada Example <ada@example.org>", any.Holder);
+            Assert.IsTrue(any.AnyMachine);
+            Assert.AreEqual("no end", any.Validity);
+            Assert.IsNull(Check(pins, BuiltAnyMachine, out reason, registry, "com.example.kit", store: HubStore), "another listed package");
+            if (ForgeSeal.Available) Assert.IsNotNull(Check(pins, BuiltAnyMachine, out reason, registry, store: HubStore, verify: ForgeSeal.Verifier), "Forge Seal agrees: " + reason);
+        }
+
+        [Test]
+        public void AGetLinkIsOpenedOnlyWhenItIsHttps()
+        {
+            var opened = new List<string>();
+            Assert.IsTrue(LicenceOffer.OpenGet(" https://shop.example.org/buy/tool?ref=forge ", opened.Add, out string refusal), refusal);
+            Assert.IsNull(refusal);
+            CollectionAssert.AreEqual(new[] { "https://shop.example.org/buy/tool?ref=forge" }, opened);
+
+            foreach (string link in new[] { "http://shop.example.org/buy/tool", "javascript:alert(1)", "file:///etc/passwd", "mailto:sales@example.org", "ftp://shop.example.org/tool",
+                "/buy/tool", "shop.example.org/buy/tool", "https://shop.example.org@other.example/buy", "", null })
+            {
+                Assert.IsFalse(LicenceOffer.OpenGet(link, opened.Add, out refusal), link);
+                Assert.IsNotNull(refusal, link);
+                StringAssert.Contains("not", refusal, link);
+            }
+            Assert.AreEqual(1, opened.Count, "nothing else reached the browser");
+            StringAssert.Contains("https", LicenceOffer.GetRefusal("http://shop.example.org/buy/tool"), "says it opens https only");
+            StringAssert.Contains("javascript:", LicenceOffer.GetRefusal("javascript:alert(1)"), "names the scheme it refused");
+            StringAssert.Contains("user name", LicenceOffer.GetRefusal("https://shop.example.org@other.example/buy"));
+        }
+
+        [Test]
+        public void ThisMachinesLicenceIdIsWhatTheLicenceCheckHashes()
+        {
+            // The value shown is the one omnihub writes for --machine, and the one the check compares.
+            Assert.AreEqual(LicenceToken.Parse(OneMachine).Machine, LicenceCheck.MachineLicenceId("machine-0001"), "omnihub --machine machine-0001");
+            Assert.AreEqual(LicenceToken.Parse(BuiltOneMachine).Machine, LicenceCheck.MachineLicenceId(BuiltMachine), "omnihub --machine with Unity's uppercase form");
+            Assert.AreNotEqual(LicenceToken.Parse(BuiltOneMachine).Machine, LicenceCheck.MachineLicenceId(BuiltMachine.ToLowerInvariant()), "case kept: the identifier as Unity reports it");
+
+            var pins = new KeyPins(path, Ed25519) { Clock = () => T0 };
+            pins.Observe(HubLicensing.Of(Json.Parse(BuiltHub), HubStore, "Example Studio"));
+            Assert.IsNotNull(Check(pins, BuiltOneMachine, out string reason, HubRegistry, store: HubStore, machine: BuiltMachine), reason);
+            Assert.IsNotNull(Check(pins, BuiltOneMachine, out reason, HubRegistry, store: HubStore, machine: " " + BuiltMachine + "\n"), "trimmed, as hashed: " + reason);
+            Assert.IsNull(Check(pins, BuiltOneMachine, out reason, HubRegistry, store: HubStore, machine: "machine-0001"));
+            StringAssert.Contains("another machine", reason);
+
+            // This machine: the id shown, given to the seller, opens a licence bound with it here.
+            string mine = StoreTrust.MachineLicenceId;
+            StringAssert.IsMatch("^[0-9a-f]{64}$", mine);
+            Assert.AreEqual(LicenceCheck.MachineHash(StoreTrust.MachineIdentifier), mine);
+            Assert.AreNotEqual(StoreTrust.MachineIdentifier, mine, "the hash only, never the raw identifier");
+            pins.Observe(Announce(OldKey));
+            string bound = TestSigner.Token(OldSeed, "{\"v\":2,\"registry\":\"" + Registry + "\",\"package\":\"" + Package + "\",\"licensee\":\"Ada\",\"machine\":\"" + mine + "\",\"issued_at\":1792972800}");
+            Assert.IsNotNull(Check(pins, bound, out reason, machine: StoreTrust.MachineIdentifier), reason);
+            Assert.IsNull(Check(pins, bound, out reason, machine: StoreTrust.MachineIdentifier + "-other"));
+        }
+
+        [Test]
+        public void ForgeSealHashesThisMachineAsTheIdShown()
+        {
+            if (!ForgeSeal.Available) Assert.Ignore("io.glitchr.licensing is not in this project.");
+            System.Reflection.MethodInfo sealHash = AppDomain.CurrentDomain.GetAssemblies().First(a => a.GetName().Name == "Glitchr.Licensing")
+                .GetType("Glitchr.Licensing.LicenseToken").GetMethod("MachineHash", new[] { typeof(string) });
+            Assert.IsNotNull(sealHash, "Forge Seal's LicenseToken.MachineHash");
+            Assert.AreEqual(StoreTrust.MachineLicenceId, sealHash.Invoke(null, new object[] { UnityEngine.SystemInfo.deviceUniqueIdentifier }), "what a licensed package's PackageLicence.Check compares");
+            Assert.AreEqual(LicenceCheck.MachineLicenceId(BuiltMachine), sealHash.Invoke(null, new object[] { BuiltMachine }));
+        }
+
         [Test]
         public void TheTestSignerIsRfc8032s()
         {

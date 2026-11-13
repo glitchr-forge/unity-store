@@ -26,8 +26,10 @@ namespace Glitchr.Store
         public string Rotation;
         /// <summary>UNIX seconds past which no licence the previous key signed may open; 0: not announced (the previous key is then not kept).</summary>
         public long PreviousKeyValidUntil;
-        /// <summary>The registry the store's licences name (a Forge's https://&lt;site&gt;/upm), when the hub says.</summary>
+        /// <summary>The registry the store's licences name (a Forge's https://&lt;site&gt;/upm, a static hub's sources[0].url), when the hub says.</summary>
         public string Registry;
+        /// <summary>A static hub's packages sold with a licence (its top-level "licensed"), each with its "get" link; null when the hub has no such list.</summary>
+        public List<LicensedPackage> Licensed;
         /// <summary>What the reading made of it against the store's pin.</summary>
         public KeyCheck Check;
 
@@ -46,6 +48,7 @@ namespace Glitchr.Store
                 Rotation = Json.String(Json.Get(licensing, "rotation"))?.Trim(),
                 PreviousKeyValidUntil = Json.Get(licensing, "previousKeyValidUntil") is double until && until > 0 ? (long)until : 0,
                 Registry = Json.String(Json.Get(licensing, "registry"))?.Trim(),
+                Licensed = LicensedPackage.ListOf(hub),
             };
         }
 
@@ -555,6 +558,9 @@ namespace Glitchr.Store
 
         /// <summary>This machine, as a licence names it (hashed): Unity's device identifier, as Forge Seal's LicenseClient uses.</summary>
         public static string MachineIdentifier => UnityEngine.SystemInfo.deviceUniqueIdentifier;
+
+        /// <summary>"This machine's licence id" (64 lowercase hex): the hash <see cref="VerifyLicence(string, string, string, string, out string)"/> compares with a licence's machine, for a seller who binds one to this machine.</summary>
+        public static string MachineLicenceId => LicenceCheck.MachineLicenceId(MachineIdentifier);
 
         /// <summary>
         /// A licence token of that store for <paramref name="package"/> installed from

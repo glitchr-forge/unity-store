@@ -78,6 +78,8 @@ namespace Glitchr.Store
         private string lockText;
         private readonly Dictionary<string, string> licenceText = new Dictionary<string, string>();
         private readonly HashSet<string> licenceOpen = new HashSet<string>();
+        private readonly HashSet<string> machineIdOpen = new HashSet<string>();
+        private readonly Dictionary<string, string> getRefusals = new Dictionary<string, string>();
         private readonly Dictionary<string, (LicenceToken Token, string Reason)> licenceVerdicts = new Dictionary<string, (LicenceToken, string)>();
 
         private Dictionary<string, UnityEditor.PackageManager.PackageInfo> registeredInfo = new Dictionary<string, UnityEditor.PackageManager.PackageInfo>();
@@ -1002,16 +1004,11 @@ namespace Glitchr.Store
         }
 
         /// <summary>
-        /// A package of a store that publishes a licensing key and sells nothing here (a static hub:
-        /// its author signs licences offline and sells them through a link of their own), served by
-        /// that store's registry: the buyer pastes the licence its seller gave them.
+        /// Where the buyer pastes a licence: a package of a static hub's own registry that its
+        /// <c>licensed</c> list names (with its "Get" link), or every such package of an older hub
+        /// that publishes a key but no list (see <see cref="LicenceOffer.For"/>).
         /// </summary>
-        private bool OffersLicence(HubItem item)
-        {
-            return item?.Origin != null && !item.Origin.Sells && string.IsNullOrEmpty(item.GitUrl) && item.GitHub == null
-                && !string.IsNullOrEmpty(item.Origin.Registry) && !string.IsNullOrEmpty(item.Origin.Store)
-                && catalog != null && catalog.Licensing.Any(l => l.Store == item.Origin.Store);
-        }
+        private LicenceOffer OfferOf(HubItem item) => catalog == null ? null : LicenceOffer.For(item, catalog.Licensing);
 
         /// <summary>The registry a licence of that item must name: the one the project installed it from, else the one it would be installed from.</summary>
         private string LicenceRegistry(HubItem item)
@@ -1033,7 +1030,8 @@ namespace Glitchr.Store
         /// </summary>
         private void DrawLicence(HubItem item)
         {
-            if (!OffersLicence(item)) return;
+            LicenceOffer offer = OfferOf(item);
+            if (offer == null) return;
             string registry = LicenceRegistry(item);
             string key = registry + "|" + item.Name;
             LicenceStore.Kept kept;
@@ -1078,10 +1076,29 @@ namespace Glitchr.Store
 
                 return;
             }
-            bool unfolded = EditorGUILayout.Foldout(licenceOpen.Contains(key), "Enter a licence", true);
+            bool unfolded;
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                unfolded = EditorGUILayout.Foldout(licenceOpen.Contains(key), "Enter a licence", true);
+                if (offer.Get != null && GUILayout.Button(new GUIContent("Get", "Buy a licence: opens " + offer.Get + " in your browser."), GUILayout.Width(60)))
+                {
+                    if (LicenceOffer.OpenGet(offer.Get, Application.OpenURL, out string refusal))
+                    {
+                        getRefusals.Remove(key);
+                        unfolded = true; // the licence field and this machine's licence id, for the seller's form
+                        status = item.Label + ": the seller's page is open in your browser. Paste the licence they send you under Enter a licence.";
+                    }
+                    else
+                    {
+                        getRefusals[key] = refusal;
+                    }
+                }
+            }
+            if (getRefusals.TryGetValue(key, out string refused)) EditorGUILayout.HelpBox(item.Label + ": " + refused, MessageType.Warning);
             if (unfolded) licenceOpen.Add(key); else licenceOpen.Remove(key);
             if (!unfolded) return;
             GUILayout.Label("The licence its seller gave you (a token). It is checked against this store's pinned key, for this package of " + registry + ", and kept for you only, on this computer - never in the project.", EditorStyles.wordWrappedMiniLabel);
+            DrawMachineLicenceId(key);
             using (new EditorGUILayout.HorizontalScope())
             {
                 licenceText.TryGetValue(key, out string text);
@@ -1113,6 +1130,36 @@ namespace Glitchr.Store
                         licenceVerdicts.Remove(key);
                         GUI.FocusControl(null);
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// "This machine's licence id", on demand: the hash a seller needs to bind a licence to
+        /// this machine (what the licence check compares), with Copy. Not a secret, the raw
+        /// identifier never shown.
+        /// </summary>
+        private void DrawMachineLicenceId(string key)
+        {
+            bool shown = EditorGUILayout.Foldout(machineIdOpen.Contains(key), "This machine's licence id", true);
+            if (shown) machineIdOpen.Add(key); else machineIdOpen.Remove(key);
+            if (!shown) return;
+            string id;
+            try { id = StoreTrust.MachineLicenceId; }
+            catch (Exception e)
+            {
+                EditorGUILayout.HelpBox("This machine's licence id cannot be read here: " + e.Message, MessageType.Warning);
+
+                return;
+            }
+            GUILayout.Label("For a licence bound to this machine, give it to the seller (their form, or a reply). It is not a secret: it opens nothing by itself. A licence sold without it opens on any machine.", EditorStyles.wordWrappedMiniLabel);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.SelectableLabel(id, EditorStyles.textField, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+                if (GUILayout.Button("Copy", GUILayout.Width(60)))
+                {
+                    EditorGUIUtility.systemCopyBuffer = id;
+                    status = "This machine's licence id is copied.";
                 }
             }
         }
