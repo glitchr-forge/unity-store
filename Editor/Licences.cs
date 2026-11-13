@@ -301,10 +301,9 @@ namespace Glitchr.Store
 
     /// <summary>
     /// Where Forge Store offers "Enter a licence": a package of a store that publishes a key and
-    /// sells nothing in the window (a static hub), served by the store's own registry - the one its
-    /// <c>licensing.registry</c> names, when it names one, since its licences name no other. When
-    /// the hub publishes <c>licensed</c>, only the packages it lists, each with its "Get" link;
-    /// without it (an older hub), every such package.
+    /// sells nothing in the window (a static hub), from a registry. When the hub publishes
+    /// <c>licensed</c>, only the packages it lists, each with its "Get" link; without it (an older
+    /// hub), every such package. Same choices as Forge Hub 1.4.0.
     /// </summary>
     public sealed class LicenceOffer
     {
@@ -321,12 +320,24 @@ namespace Glitchr.Store
                 || string.IsNullOrEmpty(origin.Registry) || string.IsNullOrEmpty(origin.Store)) return null;
             HubLicensing announced = licensing?.FirstOrDefault(l => l.Store == origin.Store);
             if (announced == null) return null;
-            // Another registry the hub lists (OpenUPM, say): the hub's licences never name it.
-            if (!string.IsNullOrEmpty(announced.Registry) && !LicenceCheck.SameRegistry(announced.Registry, origin.Registry)) return null;
             if (announced.Licensed == null) return new LicenceOffer { Licensing = announced };
             LicensedPackage listed = announced.Licensed.FirstOrDefault(p => p.Package == item.Name);
 
             return listed == null ? null : new LicenceOffer { Licensing = announced, Get = string.IsNullOrEmpty(listed.Get) ? null : listed.Get, Listed = true };
+        }
+
+        /// <summary>
+        /// A warning when the registry a licence of this package must name (the one it is installed
+        /// from, else the one it would be) is not the registry the store's licences name
+        /// (<c>licensing.registry</c>): such a licence would be refused. Null when they agree or the
+        /// hub does not say. The check itself is unchanged.
+        /// </summary>
+        public string RegistryWarning(string registry)
+        {
+            string named = Licensing?.Registry;
+            if (string.IsNullOrEmpty(named) || LicenceCheck.SameRegistry(named, registry)) return null;
+
+            return "this package comes from " + (registry ?? "no registry") + ", but the store's licences name " + named + ": a licence of this store would be refused here. Install it from " + named + " to use one.";
         }
 
         /// <summary>Why a "get" link is not opened, or null when it may be: an absolute https address with a host and no user name in it. Nothing else is ever done with it.</summary>
@@ -335,7 +346,7 @@ namespace Glitchr.Store
             if (string.IsNullOrWhiteSpace(link)) return "the store gives no link to get a licence: nothing opened.";
             if (!Uri.TryCreate(link.Trim(), UriKind.Absolute, out Uri uri) || string.IsNullOrEmpty(uri.Host)) return "the store's link to get a licence (" + link.Trim() + ") is not a web address: not opened.";
             if (uri.Scheme != Uri.UriSchemeHttps) return "the store's link to get a licence is not https (" + uri.Scheme + ":): Forge Store opens https links only, so it was not opened.";
-            if (!string.IsNullOrEmpty(uri.UserInfo)) return "the store's link to get a licence carries a user name before its host (" + uri.Host + "): not opened.";
+            if (!string.IsNullOrEmpty(uri.UserInfo)) return "the store's link to get a licence carries a user name or a password before its host (" + uri.Host + "): not opened.";
 
             return null;
         }

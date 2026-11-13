@@ -47,7 +47,7 @@ namespace Glitchr.Store
                 PreviousKey = Json.String(Json.Get(licensing, "previousKey"))?.Trim(),
                 Rotation = Json.String(Json.Get(licensing, "rotation"))?.Trim(),
                 PreviousKeyValidUntil = Json.Get(licensing, "previousKeyValidUntil") is double until && until > 0 ? (long)until : 0,
-                Registry = Json.String(Json.Get(licensing, "registry"))?.Trim(),
+                Registry = Json.String(Json.Get(licensing, "registry"))?.Trim().TrimEnd('/'),
                 Licensed = LicensedPackage.ListOf(hub),
             };
         }

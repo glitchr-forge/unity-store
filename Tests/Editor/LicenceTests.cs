@@ -496,11 +496,15 @@ namespace Glitchr.Store.Tests
             Assert.AreEqual("https://shop.example.org/buy/tool", LicenceOffer.For(items.Single(i => i.Name == "com.example.tool"), all).Get);
             Assert.IsNotNull(LicenceOffer.For(items.Single(i => i.Name == "com.example.kit"), all));
             Assert.IsNull(LicenceOffer.For(items.Single(i => i.Name == "com.example.free"), all), "free");
-            Assert.IsNull(LicenceOffer.For(items.Single(i => i.Name == "com.cysharp.unitask"), all), "OpenUPM, the hub's second source: its licences never name that registry");
+            Assert.IsNull(LicenceOffer.For(items.Single(i => i.Name == "com.cysharp.unitask"), all), "OpenUPM, the hub's second source, not listed");
+            Assert.IsNull(LicenceOffer.For(items.Single(i => i.Name == "com.example.tool"), all).RegistryWarning("https://example.github.io/hub/"), "the store's own registry");
             licensing.Licensed = null;
-            Assert.IsNull(LicenceOffer.For(items.Single(i => i.Name == "com.cysharp.unitask"), all), "even without a list, once licensing.registry says which registry is the hub's");
+            LicenceOffer other = LicenceOffer.For(items.Single(i => i.Name == "com.cysharp.unitask"), all);
+            Assert.IsNotNull(other, "without a list, as 1.5.0 (and Forge Hub 1.4.0): offered");
+            StringAssert.Contains("would be refused", other.RegistryWarning("https://package.openupm.com"), "but the window warns: its licences name the hub's registry");
             Assert.IsNotNull(LicenceOffer.For(items.Single(i => i.Name == "com.example.free"), all));
             licensing.Licensed = LicensedPackage.ListOf(hub);
+            Assert.AreEqual("https://example.github.io/hub", HubLicensing.Of(Json.Parse("{\"licensing\":{\"publicKey\":\"" + HubKey + "\",\"registry\":\"https://example.github.io/hub/\"}}"), HubStore, "x").Registry, "read without its final slash");
 
             // The Installed tab: the installed package's offer is the same item, so the same field.
             const string manifest = "{\"dependencies\":{\"com.example.tool\":\"1.0.0\",\"com.example.free\":\"1.0.0\"},\"scopedRegistries\":[{\"name\":\"Example Studio\",\"url\":\"https://example.github.io/hub\",\"scopes\":[\"com.example\"]}]}";
@@ -544,6 +548,7 @@ namespace Glitchr.Store.Tests
             StringAssert.Contains("https", LicenceOffer.GetRefusal("http://shop.example.org/buy/tool"), "says it opens https only");
             StringAssert.Contains("javascript:", LicenceOffer.GetRefusal("javascript:alert(1)"), "names the scheme it refused");
             StringAssert.Contains("user name", LicenceOffer.GetRefusal("https://shop.example.org@other.example/buy"));
+            Assert.IsNotNull(LicenceOffer.GetRefusal("https://user:secret@shop.example.org/buy"), "a password too");
         }
 
         [Test]

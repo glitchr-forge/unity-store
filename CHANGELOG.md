@@ -14,12 +14,14 @@ adheres to [Semantic Versioning](https://semver.org/).
   (`HubLicensing.Licensed`, `LicensedPackage`). On a store that publishes it,
   **Enter a licence** shows only on the packages it lists, in the Packages
   and Installed tabs alike, and those with a `get` link get a **Get** button
-  that opens it in the browser - an absolute https address only (no user
-  name before the host); any other link is not opened and the window says
-  why. The packages it does not list are free: no licence field. A store
+  that opens it in the browser (Application.OpenURL, never a shell) - an
+  absolute https address with a host and no user name or password in it;
+  any other link is not opened and the window says why. The packages it
+  does not list are free: no licence field. An empty list: none. A store
   that publishes a key but no `licensed` keeps 1.5.0's behaviour (the field
-  on every package of its registry). `LicenceOffer.For(item, licensing)`,
-  `LicenceOffer.GetRefusal`, `LicenceOffer.OpenGet`.
+  on every package of its registries); without a key the list is ignored.
+  `LicenceOffer.For(item, licensing)`, `LicenceOffer.GetRefusal`,
+  `LicenceOffer.OpenGet`, `LicenceOffer.RegistryWarning`.
 - **This machine's licence id**, a foldout under Enter a licence (opened by
   Get too): the SHA-256 hex of Unity's `SystemInfo.deviceUniqueIdentifier`,
   exactly what the licence check compares with a licence's `machine` (and
@@ -30,12 +32,14 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- `licensing.registry`, when the hub gives it, names the store's own
-  registry: the licence field is offered only on the packages of that
-  registry, not on those of another registry the hub lists (OpenUPM, say),
-  whose packages its licences can never name. The registry a licence is
-  checked against is unchanged (the one the project installed the package
-  from, else the item's), and a Forge's licences are untouched.
+- `licensing.registry` is read without its final slash. When the registry a
+  package's licence must name (the one the project installed it from, else
+  the one it would come from) differs from it - a package another upm source
+  of the hub serves, say -, the licence field warns that such a licence
+  would be refused there. The verification itself is unchanged, and a
+  Forge's licences are untouched. The same choices as Forge Hub 1.4.0 (empty
+  `licensed`, entries that are not objects with a `package` ignored, Get
+  links, the machine id).
 
 ## [1.5.0] - 2026-11-13
 

@@ -1094,6 +1094,8 @@ namespace Glitchr.Store
                     }
                 }
             }
+            string mismatch = offer.RegistryWarning(registry);
+            if (mismatch != null) EditorGUILayout.HelpBox(item.Label + ": " + mismatch, MessageType.Warning);
             if (getRefusals.TryGetValue(key, out string refused)) EditorGUILayout.HelpBox(item.Label + ": " + refused, MessageType.Warning);
             if (unfolded) licenceOpen.Add(key); else licenceOpen.Remove(key);
             if (!unfolded) return;

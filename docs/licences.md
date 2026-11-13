@@ -98,16 +98,21 @@ writes it from `hub.yaml`, only beside `licensing`):
 - A listed package with a `get` link gets a **Get** button: the link opens in
   the browser, and the licence field and this machine's licence id unfold
   for the seller's form. The link is used for nothing else, and only when it
-  is an absolute `https://` address without a user name before its host;
+  is an absolute `https://` address with a host and without a user name or
+  password before it;
   any other (`http:`, `javascript:`, `file:`, a relative path...) is not
   opened and the window says why.
 - A store that publishes a key but no `licensed` (an older hub) keeps
   Forge Store 1.5.0's behaviour: the field on every package of its registry.
-- `licensing.registry`, when given (omnihub writes the hub's `sources[0].url`),
-  is the store's own registry: the field is offered only on packages of that
-  registry, never on those of another registry the hub lists (OpenUPM, say),
-  which its licences cannot name. The registry a licence is checked against
-  stays the one the project installed the package from (else the item's).
+- Entries of `licensed` that are not objects with a `package` (a plain
+  string, say) are ignored; a `licensed` that is not a list counts as absent.
+  Without a key, `licensed` is ignored: no field anywhere.
+- `licensing.registry` (omnihub writes the hub's `sources[0].url`) is read
+  without its final slash. A licence stays bound to the registry the project
+  installed the package from (else the one it would come from); when that is
+  not the registry the store's licences name - a package another upm source
+  of the hub serves, say -, the field warns that a licence of this store would
+  be refused there. Nothing in the verification changes.
 - A Forge is not concerned: it sells through its checkout, its activated
   licences arrive by themselves.
 
