@@ -4,6 +4,76 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-11-13
+
+### Added
+
+- Profiles: the Profiles tab lists the profiles of the per-user
+  `profiles.json` that Forge Hub (the desktop app) shares - a profile is one
+  hub document (name, theme, sources, licensing), shared as an https address
+  or a file. Add one by its address (https; http only from this machine; no
+  user name, password or token in the address; redirects followed on the same
+  host only, another host refused with its address named; 1 MB at most) or
+  from a file (an exported `<name>.forge-profile.json`, a `hub.json`, or a
+  `package.json` with a `"hub"` section); rename, remove, read again (on
+  demand, once per editor start, a failed attempt counting; a failure keeps
+  the profile as last read), export (the bare hub document, never written
+  over an existing file in a folder), and pick the active one, or none. The
+  file sits in `~/Library/Application Support/Forge` on macOS (where Rust's
+  `dirs` puts it; Mono's `LocalApplicationData` is `~/.local/share` there),
+  `%LOCALAPPDATA%\Forge` on Windows, `$XDG_DATA_HOME/Forge` or
+  `~/.local/share/Forge` on Linux, or wherever `FORGE_PROFILES_FILE` says. It
+  is read as a JSON tree and written whole through a temporary file renamed
+  over it, read again just before each write, unknown fields kept; a file
+  that is not JSON is never written over. Anything that looks like a secret
+  (members named token, password, secret, apiKey, licenseKey, privateKey...,
+  unless they hold an address, and any GitHub token) is taken out of a hub
+  document on add, refresh and export, as Forge Hub does. The same address
+  added twice updates the profile already there; the user's name for a
+  profile survives a refresh. A URL profile is the same store as that hub
+  added as a source, so its licensing key stays pinned as in 1.3.0.
+- The window's header shows the active profile: its name, and its theme
+  before a preset's. The project's presets are shown in the Profiles tab,
+  read only, "from this project" (hideable as before); switching profile
+  never changes the project.
+- The Installed tab says "From profile <name>" (or "from another profile")
+  for a package another profile gave, instead of flagging its source as gone
+  - also for a package installed in 1.3.0 from a source a profile now carries.
+- A version picker: next to Update (in the catalogue and the Installed tab),
+  a menu lists every known version of the package, newest first, older ones
+  included to go back - a GitHub package's tags, a registry's or a hub's
+  versions, Unity's compatible versions for the project's other packages.
+  Choosing one installs exactly that version (a Git package by its URL at
+  that tag, a registry's as `name@version`). The plain click still takes the
+  newest; a move across a major version of a package that is not from your
+  sources asks first.
+- Git dependencies: Unity's Package Manager does not resolve a Git package's
+  dependencies on other Git packages. Installing or updating a Git package now
+  reads its `package.json` dependencies (the one the catalogue already read,
+  else GitHub's contents API at the tag installed, with the same token and
+  ETag cache), and each one a source of yours offers as a Git package and the
+  project lacks in every form (manifest, lock, registered, a folder of
+  `Packages/`) is added in the same `AddAndRemove` - its tag is the version
+  asked for, else the newest of that major version. Three levels at most,
+  each package once (cycles cut). A dependency a registry of your sources
+  offers gets its registry written into the manifest, and Unity resolves it.
+  The window says in one line what it added.
+- Samples and embedding, in the Installed tab: an installed package's samples
+  (its `package.json`'s `samples`) are listed and imported into
+  `Assets/Samples/<package>/<version>/<sample>` by Unity's own Sample API, as
+  Unity's window does (a previous import is replaced only once you agree);
+  **Embed** copies a registry's or a Git package from Unity's cache into
+  `Packages/<name>` (`Client.Embed`), so it becomes editable.
+
+### Changed
+
+- The sources you added by hand (the Sources tab, kept in EditorPrefs) stay
+  beside profiles and are read with any profile and with none; they are not
+  turned into a local profile. The project's presets moved from the Sources
+  tab to the Profiles tab.
+- `HubInstaller.Install` and `HubInstaller.Apply` return the line telling
+  what was added with the package (or null).
+
 ## [1.3.0] - 2026-11-12
 
 ### Added

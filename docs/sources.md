@@ -87,8 +87,19 @@ or as a hub, by the URL of its `package.json` or of its repository.
 A package installed in the project whose `package.json` has a `"hub"` section
 is a source by itself, read from the disk: a company's base package brings its
 registry, its GitHub organisation and its theme to everyone who installs it.
-It shows under Sources as a preset, which the user can hide (and show again).
+It shows under Profiles, "from this project", read only; the user can hide it (and show it again).
 Nothing of the package runs: the window reads its JSON.
+
+### A profile
+
+The same document, kept per user as a profile (Profiles tab) instead of being
+carried by a package: added by its https address or from a file, one profile
+active at a time, in the `Forge/profiles.json` Forge Hub shares. The active
+profile is read first, then the sources you added, then the project's presets;
+its theme heads the window. An exported profile is the bare document,
+`<name>.forge-profile.json`. No secret belongs in it: members that look like
+one (a token, a password, a private key...) are taken out when a profile is
+added, read again or exported.
 
 ## Licensing: a store's key
 

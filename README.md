@@ -13,15 +13,35 @@ package hubs and installs their packages in the open project in one click:
   branch or commit, the update a source offers, **Update all** (one
   `AddAndRemove`: one resolve, one recompilation), Remove. A package whose
   source is gone - removed from the sources, or no longer listing it - is
-  flagged, not hidden. Then the project's other packages (dependencies and
-  built-in modules on request), with Unity's recommended version within the
-  same major one. Unity's Package Manager does every change and resolves
-  every dependency.
+  flagged, not hidden; one another profile gave says "From profile <name>".
+  Then the project's other packages (dependencies and built-in modules on
+  request), with Unity's recommended version within the same major one. A
+  package's samples are imported into `Assets/Samples` as Unity's window does,
+  and **Embed** copies a package into `Packages/` to edit it. Unity's Package
+  Manager does every change and resolves every dependency.
+- **Versions.** Next to Update, a menu of every known version - tags,
+  registry versions, a hub's versions - newest first, older ones to go back;
+  the one chosen is installed exactly. A move across a major version of a
+  package that is not from your sources asks first.
+- **Git dependencies.** Unity does not resolve a Git package's dependencies on
+  other Git packages: installing one adds, in the same change, the ones your
+  sources offer and the project lacks (three levels at most), and says which.
 - **Games.** A hub's games: a free one is played in the browser (and
   downloaded from its page); a paid one is downloaded once bought, played in
   the browser only when its studio opened a playable preview.
-- **Sources.** Added on the fly and kept per user, not per project. Nothing is
-  built in: the window is open source and belongs to no one.
+- **Profiles.** A profile is a hub people share - a team's or a store's
+  sources, look and licensing - as an https address or a file. Keep several,
+  switch between them (or use none); add, rename, read again, export, remove.
+  They live in the per-user `Forge/profiles.json` that Forge Hub, the desktop
+  app, reads and writes too (`~/Library/Application Support` on macOS,
+  `%LOCALAPPDATA%` on Windows, `~/.local/share` on Linux; `FORGE_PROFILES_FILE`
+  overrides it). Nothing secret is ever written there nor into an export. The
+  active profile heads the window with its name and theme; switching never
+  changes the project. The project's own presets are shown read only, "from
+  this project".
+- **Sources.** Added on the fly and kept per user, not per project, used with
+  any profile. Nothing is built in: the window is open source and belongs to
+  no one.
   - a **hub manifest** (`/upm/-/hub.json` on a Forge running
     omnibase/forge, or `hub.json` of a static hub on GitHub Pages);
   - a **UPM registry** and its scopes (OpenUPM, a company's Verdaccio...);
@@ -59,7 +79,7 @@ From Git, in `Packages/manifest.json`:
 
 ```json
 "dependencies": {
-  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.3.0"
+  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.4.0"
 }
 ```
 
@@ -74,7 +94,7 @@ old one replaces it by a one-line change in `Packages/manifest.json`:
 
 ```diff
 -  "io.glitchr.hub": "...",
-+  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.3.0",
++  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.4.0",
 ```
 
 When both are there, the window shows a notice with a button that removes
@@ -110,8 +130,13 @@ the key it keeps, a GitHub source against canned answers of GitHub's API
 (pattern, packages, tags, ETags, rate limit, where the token goes), the
 Installed tab's reading of a manifest and its lock (sources, Git references,
 updates), the pinned licensing keys (first use, a change held, a signed
-rotation - checked by Forge Seal when the project has it, skipped otherwise)
-and the images' cache (PNG and JPEG only, bounded). In batch mode:
+rotation - checked by Forge Seal when the project has it, skipped otherwise),
+the images' cache (PNG and JPEG only, bounded), the profiles file (on a
+temporary file, never the user's: unknown fields kept, secrets out, addresses
+and redirects checked, refresh), the version menu, a Git package's Git
+dependencies (against a fake GitHub), and samples (their import folder checked
+against Unity's own Sample API when the test project has a package with
+samples). In batch mode:
 
 ```sh
 Unity -batchmode -nographics -projectPath <project> -runTests -testPlatform EditMode -testResults results.xml
