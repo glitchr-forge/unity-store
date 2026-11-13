@@ -4,6 +4,57 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-11-13
+
+### Added
+
+- Licences bound to their store (plan item 17.2):
+  `StoreTrust.VerifyLicence(store, token, registry, package, out reason)`
+  opens a licence only when its signature verifies with the store's pinned
+  key, it is of format 2, its `registry` is the registry the project
+  installed the package from (the lock's `url`, else the scoped registry
+  whose scope matches it most closely; a final slash and the host's case
+  aside), its `package` is the package's name, its `machine` (when it names
+  one) is this machine's and its `valid_until` (when it has one) is ahead.
+  A format 1 token is refused with an invitation to activate again online;
+  a token of another store says "the licence is another store's".
+- The store's previous key after a rotation: a hub's
+  `licensing.previousKeyValidUntil` keeps the former key in the pin
+  (`previous`, `previousUntil` = the earlier of that date and 30 days after
+  the rotation was seen), so licences signed before the rotation keep
+  opening until then; never without that date, dropped once past. Also on
+  Accept of a change whose hub names the pinned key as `previousKey`.
+  `licensing.registry` is read too. Sources > Licensing keys shows a kept
+  previous key and its end.
+- A static hub's offline licences (plan item 14): on a package of a store
+  that publishes a key and sells nothing in the window, **Enter a licence**
+  in the Packages and Installed tabs. The pasted token is checked as above
+  and kept per user in `Forge Store/licences.json` (local application data,
+  beside keys.json, never in the project), shown with its licensee and
+  validity, removable; a wrong or foreign token is refused with the reason.
+  A format 2 token without `machine` opens on any machine, without
+  `valid_until` has no end. Forge Seal 1.1.0's `PackageLicence` reads the
+  same file, so the package checks itself. See docs/licences.md.
+
+### Changed
+
+- `keys.json` is shared with Forge Hub 1.2.0 (profiles-questions 15): read
+  again before every decision (a key announced, Accept, Keep, Forget, a
+  licence's check) and each change written at once - through a temporary
+  file renamed over it, only the store decided on and only the fields
+  Forge Store owns changed, other stores and unknown fields kept, stores
+  sorted by name. A file that does not parse is read again a few times
+  (40 ms apart) before it counts as damaged. A decision taken in Forge Hub
+  is seen at once and a stale copy never undoes it. `KeyPins.Save()` has
+  nothing left to write; `KeyPins.Get` returns a copy of the pin.
+- The signature of a licence is checked with Forge Seal's Ed25519 only (any
+  Forge Seal version); Forge Store reads the payload itself.
+
+### Deprecated
+
+- `StoreTrust.VerifyLicence(store, token, out reason)`: binds the licence to
+  nothing; use the overload with the registry and the package.
+
 ## [1.4.0] - 2026-11-13
 
 ### Added

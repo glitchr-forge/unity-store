@@ -69,7 +69,19 @@ package hubs and installs their packages in the open project in one click:
   hub (`licensing.publicKey`) is pinned the first time the window reads it. A
   later, different key is shown as a warning: until the user accepts it, the
   store's licences are not trusted and it sells nothing in the window. A key
-  the pinned one signed passes alone. See [docs/sources.md](docs/sources.md#licensing-a-stores-key).
+  the pinned one signed passes alone, and the licences the former key signed
+  keep opening for a bounded time. The pins live in `Forge Store/keys.json`,
+  which Forge Hub shares: one approval per store for both apps. See
+  [docs/sources.md](docs/sources.md#licensing-a-stores-key).
+- **Licences bound to their store.** A licence opens a package only when it
+  names the registry the package comes from and the package itself (format
+  2): a licence of store B never opens a package of the same name from store
+  A. On a static hub, whose author signs licences offline and sells them
+  through a link of their own, the buyer pastes the licence on the package
+  (**Enter a licence**): checked, then kept for that user outside the project
+  (`Forge Store/licences.json`), shown with its licensee and validity,
+  removable; the package checks it with Forge Seal. See
+  [docs/licences.md](docs/licences.md).
 
 Requires Unity 2021.3 or later. Editor only: nothing of it goes into a build.
 
@@ -79,7 +91,7 @@ From Git, in `Packages/manifest.json`:
 
 ```json
 "dependencies": {
-  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.4.0"
+  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.5.0"
 }
 ```
 
@@ -94,7 +106,7 @@ old one replaces it by a one-line change in `Packages/manifest.json`:
 
 ```diff
 -  "io.glitchr.hub": "...",
-+  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.4.0",
++  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.5.0",
 ```
 
 When both are there, the window shows a notice with a button that removes
@@ -130,7 +142,12 @@ the key it keeps, a GitHub source against canned answers of GitHub's API
 (pattern, packages, tags, ETags, rate limit, where the token goes), the
 Installed tab's reading of a manifest and its lock (sources, Git references,
 updates), the pinned licensing keys (first use, a change held, a signed
-rotation - checked by Forge Seal when the project has it, skipped otherwise),
+rotation - checked by Forge Seal when the project has it, skipped otherwise;
+the file shared with Forge Hub: another app's decision seen at once, its
+fields kept, a file caught mid-write), licences (the previous key's bound,
+the binding to registry and package with a Forge's format 2 token and a
+format 1 one, a static hub's offline licences signed by `omnihub licence
+sign`, the per-user licences file) with real Ed25519 signatures,
 the images' cache (PNG and JPEG only, bounded), the profiles file (on a
 temporary file, never the user's: unknown fields kept, secrets out, addresses
 and redirects checked, refresh), the version menu, a Git package's Git

@@ -1,0 +1,151 @@
+# Licences
+
+A store that sells licensed packages signs each licence with its Ed25519 key.
+Forge Store pins that key per user (see [sources.md](sources.md#licensing-a-stores-key)),
+checks a licence against the pinned key - never against what the hub serves
+today -, and requires the licence to name the store and the package it opens.
+Two kinds of store sign licences:
+
+- **A Forge** (omnibase/forge, self-hosted or hosted): the full tier. It sells
+  through its checkout (see [buying.md](buying.md)), counts seats and machines,
+  revokes. Its tokens are bound to one machine and run 30 days; the software
+  activates again online.
+- **A static hub** (a template on GitHub Pages, no server): the offline tier.
+  Its author signs licences on their own machine (`omnihub licence sign`) and
+  sells them through a link of their own (a shop, a payment link). The buyer
+  pastes the licence into Forge Store. What can be checked: the store, the
+  package, an end, and one machine when the seller asked for it. What cannot:
+  seats and revocation.
+
+Light protection, not DRM: a licence checked offline can be copied.
+
+## Bound to the store and the package (format 2)
+
+A licence token is `base64url(payload JSON) "." base64url(Ed25519 signature)`.
+Its payload of format 2 names, signed:
+
+- `registry`: the address of the store's Unity registry - a Forge's
+  `https://<site>/upm` (its manifest's `licensing.registry`), a static hub's
+  registry as its manifest lists it (`sources[0].url`, what Forge Store writes
+  as the project's scoped registry);
+- `package`: the package's UPM name (null for a game or an application).
+
+Forge Store opens a licence for a package only when, all of them:
+
+1. a key is pinned for its store and no change of key waits for the user;
+2. the signature verifies with the pinned key - or with the store's previous
+   key, within its bound (below);
+3. `v` is 2 or more. A format 1 token names no store: it is refused, with an
+   invitation to activate again online (a Forge then signs a format 2 token)
+   or to ask the seller for a new one;
+4. `registry` is the registry the project installed the package from (the
+   lock's `url`, else the scoped registry whose scope matches the package most
+   closely), a final slash, the scheme's and the host's case aside - else
+   "the licence is another store's": a key signed by store B never opens a
+   package of the same name installed from store A;
+5. `package` is the package's name;
+6. `machine`, when the token names one, is this machine's (SHA-256 of
+   Unity's `SystemInfo.deviceUniqueIdentifier`, as Forge Seal computes it);
+   absent, any machine;
+7. now is before `valid_until`, when the token has one; absent, no end.
+
+`StoreTrust.VerifyLicence(store, token, registry, package, out reason)` is
+that check, for whoever needs it in the editor. The signature itself is
+Forge Seal's Ed25519 (`io.glitchr.licensing`, any version): without Forge
+Seal in the project, no licence is opened ("Forge Seal is not in the
+project"). A licensed package usually depends on it anyway.
+
+## After a rotation: the previous key, bounded
+
+When a store rotates its key, the licences its previous key signed are still
+running (a Forge's run up to 30 days). The hub then announces, beside the
+signed rotation, until when they may:
+
+```json
+"licensing": {"publicKey": "<new>", "previousKey": "<old>", "rotation": "<old's signature of the new>",
+              "previousKeyValidUntil": 1795564800}
+```
+
+On a rotation that passes (or when the user accepts a change whose hub names
+the pinned key as `previousKey`), the pin keeps the former key with an end:
+`previousUntil = min(previousKeyValidUntil, the moment the change was seen +
+30 days)` - a hub.json that serves a far date cannot extend a leaked key.
+Without a `previousKeyValidUntil`, the former key is not kept. A licence the
+pinned key does not verify is tried with the former key while it opens, and
+refused once past ("signed with the store's previous key, which no longer
+opens licences since ..."); the former key is then dropped from the pin.
+
+For a static hub this means: an offline licence without an end, signed with
+the old key, stops opening at most 30 days after the rotation is seen - its
+seller signs it again with the new key and the buyer pastes the new one.
+
+## A static hub's licences, pasted
+
+On a package of a store that publishes a key and sells nothing in the window
+(a static hub), the Packages tab and the Installed tab show **Enter a
+licence**: the buyer pastes the token the seller sent, **Check and keep**
+checks it as above - against the store's pinned key, the registry the
+package comes from (or would come from) and the package's name - and keeps
+it. A kept licence shows its licensee and its validity ("no end", or "until"
+a day; any machine or this machine) and can be removed. A licence that no
+longer opens (another machine, past its end, the store's key changed) says
+why. A wrong or foreign token is refused with the reason, and nothing is kept.
+
+The payload of an offline licence (`omnihub licence sign`):
+
+```json
+{"v": 2, "registry": "https://owner.github.io/hub", "package": "com.example.tool",
+ "licensee": "Ada <ada@example.org>", "issued_at": 1792972800}
+```
+
+with `valid_until` and `updates_until` optional, and `machine` (SHA-256 hex
+of the buyer's machine identifier) only when the seller binds it to one.
+
+### Where licences are kept, and why there
+
+`Forge Store/licences.json` under the user's local application data, beside
+`keys.json` (`~/.local/share` on macOS and Linux unless `XDG_DATA_HOME` is
+set, `%LOCALAPPDATA%` on Windows - where Unity's Mono puts it):
+
+```json
+{"version": 1, "licences": [
+  {"registry": "https://owner.github.io/hub", "package": "com.example.tool",
+   "store": "manifest:https://owner.github.io/hub/-/hub.json", "token": "...", "addedAt": "2026-11-13T09:00:00Z"}
+]}
+```
+
+Never in the project: a licence names its buyer and is theirs, it opens the
+package in every project of that user, and a project's repository travels -
+to teammates, who need licences of their own, and sometimes to the public.
+One licence per registry and package; read again before each change, unknown
+fields kept, written through a temporary file renamed over it, never written
+over when it is not JSON.
+
+The package checks itself with Forge Seal 1.1.0 or later, which reads that
+file: `PackageLicence.Check(registry, package, publicKey, out refusal)`.
+
+## keys.json, shared with Forge Hub
+
+Forge Hub (the desktop app) pins keys in the very same file, so one approval
+per store holds for both apps. Forge Store reads it again before every
+decision (a key announced, Accept, Keep, Forget, a licence's check), writes
+each change at once, changes only the store it decides on and only the fields
+it owns (`key`, `name`, `pending`, `reason`, `refused`, `previous`,
+`previousUntil`), keeps every other store and field, writes the stores sorted
+by name with a two-space indent through a temporary file renamed over the
+file, and reads a file that does not parse a few times (40 ms apart) before
+calling it damaged - then keeps it aside as `keys.json.damaged` and pins its
+stores again on their next reading.
+
+```json
+{"manifest:https://hub.example.com/hub.json": {"key": "<base64>", "name": "Example",
+  "previous": "<base64>", "previousUntil": 1795564800}}
+```
+
+## Buying stays as it is
+
+A Forge's **Buy** opens its device-flow page in the browser, and the shop's
+own checkout confirms the payment: a stray click never charges. There is no
+one-click purchase yet (it needs a saved payment method on the Forge). When
+there is one, its confirmation will show the offer's price and currency from
+the catalogue and the store's name before anything is charged.

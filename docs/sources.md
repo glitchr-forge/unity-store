@@ -140,6 +140,13 @@ When the hub announces another key:
 - Sources > Licensing keys lists the pinned keys; **Forget** drops one, whose
   next key is then pinned again on first use.
 
+After a rotation the hub may add `previousKeyValidUntil` (UNIX time): the
+licences the previous key signed keep opening until then, 30 days after the
+rotation was seen at most. `registry` names the registry the store's licences
+are bound to. Forge Hub (the desktop app) reads and writes the same
+`keys.json`: one approval per store for both apps, each change read again and
+written at once. See [licences.md](licences.md).
+
 Light protection, not DRM: the pin protects the user against a swapped key,
 not the store against a determined user.
 

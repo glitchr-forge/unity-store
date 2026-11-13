@@ -190,9 +190,8 @@ namespace Glitchr.Store
             {
                 try
                 {
-                    KeyPins pins = Pins();
-                    foreach (HubLicensing licensing in result.Licensing) licensing.Check = pins.Observe(licensing);
-                    pins.Save();
+                    // One change of the shared file, read again just before.
+                    Pins().ObserveAll(result.Licensing);
                 }
                 catch (Exception e)
                 {

@@ -74,6 +74,12 @@ namespace Glitchr.Store
         private string renaming;
         private string renameText = string.Empty;
 
+        private string manifestText;
+        private string lockText;
+        private readonly Dictionary<string, string> licenceText = new Dictionary<string, string>();
+        private readonly HashSet<string> licenceOpen = new HashSet<string>();
+        private readonly Dictionary<string, (LicenceToken Token, string Reason)> licenceVerdicts = new Dictionary<string, (LicenceToken, string)>();
+
         private Dictionary<string, UnityEditor.PackageManager.PackageInfo> registeredInfo = new Dictionary<string, UnityEditor.PackageManager.PackageInfo>();
         private Dictionary<string, List<PackageSample>> samples = new Dictionary<string, List<PackageSample>>();
         private Dictionary<string, string[]> unityVersions = new Dictionary<string, string[]>();
@@ -111,7 +117,9 @@ namespace Glitchr.Store
                 string lockPath = System.IO.Path.Combine(folder, "packages-lock.json");
                 var registered = UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages();
                 var versions = registered.GroupBy(p => p.name).ToDictionary(g => g.Key, g => g.First().version);
-                projectPackages = InstalledPackages.Read(System.IO.File.ReadAllText(System.IO.Path.Combine(folder, "manifest.json")), System.IO.File.Exists(lockPath) ? System.IO.File.ReadAllText(lockPath) : null, versions);
+                manifestText = System.IO.File.ReadAllText(System.IO.Path.Combine(folder, "manifest.json"));
+                lockText = System.IO.File.Exists(lockPath) ? System.IO.File.ReadAllText(lockPath) : null;
+                projectPackages = InstalledPackages.Read(manifestText, lockText, versions);
                 var names = registered.GroupBy(p => p.name).ToDictionary(g => g.Key, g => g.First().displayName);
                 foreach (InstalledPackage package in projectPackages) package.DisplayName = names.TryGetValue(package.Name, out string display) ? display : null;
                 // Unity's recommended version when it has one, else the newest it knows for this editor.
@@ -168,6 +176,7 @@ namespace Glitchr.Store
             try
             {
                 ReadProfiles();
+                licenceVerdicts.Clear();
                 catalog = await HubCatalogReader.Read(HubSources.All());
                 installed = await HubInstaller.Installed();
                 ReadProject();
@@ -298,19 +307,26 @@ namespace Glitchr.Store
                         GUILayout.FlexibleSpace();
                         if (GUILayout.Button("Keep the pinned key", GUILayout.Width(150)))
                         {
-                            StoreTrust.Pins.Refuse(licensing.Store);
-                            StoreTrust.Pins.Save();
+                            KeyDecision(() => StoreTrust.Pins.Refuse(licensing.Store));
                             licensing.Check = KeyCheck.Refused;
                         }
                         if (GUILayout.Button("Accept the new key", GUILayout.Width(150)))
                         {
-                            StoreTrust.Pins.Accept(licensing.Store);
-                            StoreTrust.Pins.Save();
+                            // The announced block too: a key it names as previous keeps opening its licences, bounded.
+                            KeyDecision(() => StoreTrust.Pins.Accept(licensing.Store, licensing));
                             licensing.Check = KeyCheck.Same;
                         }
                     }
                 }
             }
+        }
+
+        /// <summary>A decision on a pinned key, written at once to the file Forge Hub shares; the licences checked again.</summary>
+        private void KeyDecision(Action decide)
+        {
+            try { decide(); }
+            catch (Exception e) { status = "Pinned keys: " + e.Message; }
+            licenceVerdicts.Clear();
         }
 
         /// <summary>The project still has the package under a former name: offered to remove it (Unity has no alias).</summary>
@@ -393,6 +409,7 @@ namespace Glitchr.Store
                     GUILayout.FlexibleSpace();
                     if (!string.IsNullOrEmpty(item.Page) && GUILayout.Button("Page", GUILayout.Width(60))) Application.OpenURL(item.Page);
                 }
+                DrawLicence(item);
 
                 if (item.Versions.Count > 0 && item.GitHub == null)
                 {
@@ -627,6 +644,7 @@ namespace Glitchr.Store
                     }
                 }
             }
+            if (fromSources && item != null) DrawLicence(item);
             DrawSamples(package);
             EditorGUILayout.EndVertical();
         }
@@ -970,12 +988,130 @@ namespace Glitchr.Store
             {
                 using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
                 {
-                    GUILayout.Label((pair.Value.Name ?? pair.Key) + "  ·  " + KeyPins.Fingerprint(pair.Value.Key) + (pair.Value.Pending != null ? "  ·  new key waiting: " + KeyPins.Fingerprint(pair.Value.Pending) : string.Empty), EditorStyles.wordWrappedMiniLabel);
+                    KeyPins.Pin pin = pair.Value;
+                    GUILayout.Label((pin.Name ?? pair.Key) + "  ·  " + KeyPins.Fingerprint(pin.Key)
+                        + (pin.Pending != null ? "  ·  new key waiting: " + KeyPins.Fingerprint(pin.Pending) : string.Empty)
+                        + (pin.PreviousOpens(DateTimeOffset.UtcNow) ? "  ·  previous key " + KeyPins.Fingerprint(pin.Previous) + " opens its licences until " + LicenceToken.Day(pin.PreviousUntil) : string.Empty), EditorStyles.wordWrappedMiniLabel);
                     if (GUILayout.Button(new GUIContent("Forget", "Its next key is pinned again on first use."), GUILayout.Width(70)))
                     {
-                        StoreTrust.Pins.Forget(pair.Key);
-                        StoreTrust.Pins.Save();
+                        KeyDecision(() => StoreTrust.Pins.Forget(pair.Key));
                         GUIUtility.ExitGUI();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// A package of a store that publishes a licensing key and sells nothing here (a static hub:
+        /// its author signs licences offline and sells them through a link of their own), served by
+        /// that store's registry: the buyer pastes the licence its seller gave them.
+        /// </summary>
+        private bool OffersLicence(HubItem item)
+        {
+            return item?.Origin != null && !item.Origin.Sells && string.IsNullOrEmpty(item.GitUrl) && item.GitHub == null
+                && !string.IsNullOrEmpty(item.Origin.Registry) && !string.IsNullOrEmpty(item.Origin.Store)
+                && catalog != null && catalog.Licensing.Any(l => l.Store == item.Origin.Store);
+        }
+
+        /// <summary>The registry a licence of that item must name: the one the project installed it from, else the one it would be installed from.</summary>
+        private string LicenceRegistry(HubItem item)
+        {
+            string installedFrom = null;
+            if (manifestText != null && installed.ContainsKey(item.Name))
+            {
+                try { installedFrom = LicenceCheck.InstalledRegistry(manifestText, lockText, item.Name); }
+                catch (FormatException) { installedFrom = null; }
+            }
+
+            return installedFrom ?? item.Origin.Registry.TrimEnd('/');
+        }
+
+        /// <summary>
+        /// The licence of a package of such a store: the one kept (its licensee, its validity,
+        /// Remove), or a field to paste one - checked against the store's pinned key, its registry
+        /// and the package before it is kept, per user, outside the project.
+        /// </summary>
+        private void DrawLicence(HubItem item)
+        {
+            if (!OffersLicence(item)) return;
+            string registry = LicenceRegistry(item);
+            string key = registry + "|" + item.Name;
+            LicenceStore.Kept kept;
+            try
+            {
+                kept = StoreTrust.Licences.Get(registry, item.Name);
+            }
+            catch (Exception e)
+            {
+                EditorGUILayout.HelpBox("Your licences file: " + e.Message, MessageType.Warning);
+
+                return;
+            }
+            if (kept != null)
+            {
+                if (!licenceVerdicts.TryGetValue(key, out var verdict))
+                {
+                    LicenceToken token = StoreTrust.VerifyLicence(item.Origin.Store, kept.Token, registry, item.Name, out string reason);
+                    verdict = (token, reason);
+                    licenceVerdicts[key] = verdict;
+                }
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (verdict.Token != null)
+                    {
+                        GUILayout.Label("Licensed to " + (verdict.Token.Holder ?? "you") + "  ·  " + verdict.Token.Validity + "  ·  " + (verdict.Token.AnyMachine ? "any machine" : "this machine")
+                            + (verdict.Token.ByPreviousKey ? "  ·  signed with the store's previous key" : string.Empty), EditorStyles.wordWrappedMiniLabel);
+                    }
+                    else
+                    {
+                        EditorGUILayout.HelpBox("Your licence for " + item.Label + " does not open it here: " + verdict.Reason, MessageType.Warning);
+                    }
+                    if (GUILayout.Button(new GUIContent("Remove licence", "Forget the licence kept for this package (on this computer, for every project)."), GUILayout.Width(110))
+                        && EditorUtility.DisplayDialog("Remove the licence", "Forget your licence for " + item.Label + "? Keep the token its seller gave you if you may need it again.", "Remove", "Cancel"))
+                    {
+                        try { StoreTrust.Licences.Remove(registry, item.Name); }
+                        catch (Exception e) { status = e.Message; }
+                        licenceVerdicts.Remove(key);
+                        GUIUtility.ExitGUI();
+                    }
+                }
+
+                return;
+            }
+            bool unfolded = EditorGUILayout.Foldout(licenceOpen.Contains(key), "Enter a licence", true);
+            if (unfolded) licenceOpen.Add(key); else licenceOpen.Remove(key);
+            if (!unfolded) return;
+            GUILayout.Label("The licence its seller gave you (a token). It is checked against this store's pinned key, for this package of " + registry + ", and kept for you only, on this computer - never in the project.", EditorStyles.wordWrappedMiniLabel);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                licenceText.TryGetValue(key, out string text);
+                licenceText[key] = EditorGUILayout.TextField(text ?? string.Empty);
+                using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(licenceText[key])))
+                {
+                    if (GUILayout.Button("Check and keep", GUILayout.Width(110)))
+                    {
+                        string pasted = licenceText[key].Trim();
+                        LicenceToken token = StoreTrust.VerifyLicence(item.Origin.Store, pasted, registry, item.Name, out string reason);
+                        if (token == null)
+                        {
+                            status = item.Label + ": licence refused - " + reason;
+                        }
+                        else
+                        {
+                            try
+                            {
+                                StoreTrust.Licences.Put(registry, item.Name, item.Origin.Store, pasted);
+                                status = "Licence kept for " + item.Label + ": licensed to " + (token.Holder ?? "you") + ", " + token.Validity + ".";
+                                licenceText.Remove(key);
+                                licenceOpen.Remove(key);
+                            }
+                            catch (Exception e)
+                            {
+                                status = item.Label + ": " + e.Message;
+                            }
+                        }
+                        licenceVerdicts.Remove(key);
+                        GUI.FocusControl(null);
                     }
                 }
             }
