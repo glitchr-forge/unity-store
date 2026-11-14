@@ -928,8 +928,86 @@ namespace Glitchr.Store
 
         private static string KeyOf(object hub) => Json.String(Json.Get(hub, "licensing", "publicKey"));
 
+        /// <summary>Each forge's links, once asked (Show linked editors): by the forge's address.</summary>
+        private readonly Dictionary<string, List<LinkedToken>> links = new Dictionary<string, List<LinkedToken>>();
+
+        /// <summary>
+        /// The forges this editor is linked to (an account token kept for them): sign this editor
+        /// out - revoked on the forge when it lists its links (forge 1.1), then forgotten here -, and
+        /// the account's other links, revocable.
+        /// </summary>
+        private void DrawLinkedForges()
+        {
+            var linked = (catalog?.Items ?? new List<HubItem>()).Select(i => i.Origin).Where(o => o != null && o.OneClick)
+                .GroupBy(o => HubPurchases.Authority(o.TokenUrl)).Select(g => g.First())
+                .Select(o => (Origin: o, Purchases: HubPurchases.For(o))).Where(p => p.Purchases != null).ToList();
+            if (linked.Count == 0) return;
+            GUILayout.Label("Linked forges", EditorStyles.boldLabel);
+            foreach (var (origin, purchases) in linked)
+            {
+                string home = HubPurchases.Authority(origin.TokenUrl);
+                bool listsLinks = HubPurchases.AccountTokensUrl(origin) != null;
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        GUILayout.Label((origin.HubName ?? home) + "  ·  " + home, EditorStyles.wordWrappedLabel);
+                        if (listsLinks && GUILayout.Button("Show linked editors", GUILayout.Width(140))) LoadLinks(home, purchases);
+                        if (GUILayout.Button("Sign this editor out", GUILayout.Width(140))) SignOut(origin, purchases, listsLinks);
+                    }
+                    if (!links.TryGetValue(home, out List<LinkedToken> tokens)) continue;
+                    foreach (LinkedToken token in tokens)
+                    {
+                        using (new EditorGUILayout.HorizontalScope())
+                        {
+                            GUILayout.Label(token.Shown, EditorStyles.miniLabel);
+                            if (!token.Current && GUILayout.Button("Revoke", GUILayout.Width(70))) Revoke(home, purchases, token);
+                        }
+                    }
+                    if (tokens.Any(t => !t.Current)) GUILayout.Label("The forge does not know which editor holds each link: the dates tell them apart.", EditorStyles.wordWrappedMiniLabel);
+                }
+            }
+            EditorGUILayout.Space();
+        }
+
+        private async void LoadLinks(string home, HubPurchases purchases)
+        {
+            try { links[home] = await purchases.LinkedTokens(); }
+            catch (Exception e) { status = e.Message; }
+            Repaint();
+        }
+
+        private async void SignOut(HubOrigin origin, HubPurchases purchases, bool listsLinks)
+        {
+            string name = origin.HubName ?? HubPurchases.Authority(origin.TokenUrl);
+            if (!EditorUtility.DisplayDialog("Sign this editor out", listsLinks
+                    ? "Sign this editor out of " + name + "? Its link is revoked on the forge and forgotten here. The licence keys already kept still open the registry."
+                    : "Forget this editor's link to " + name + " here? This forge cannot revoke it from Unity: the link stays on your account's page there, where it can be removed.", "Sign out", "Keep")) return;
+            try
+            {
+                bool revoked = await purchases.SignOut();
+                links.Remove(HubPurchases.Authority(origin.TokenUrl));
+                status = revoked ? "Signed out of " + name + ": the forge revoked this editor's link." : "This editor's link to " + name + " is forgotten here; remove it on your account's page there.";
+            }
+            catch (Exception e) { status = e.Message; }
+            Repaint();
+        }
+
+        private async void Revoke(string home, HubPurchases purchases, LinkedToken token)
+        {
+            if (!EditorUtility.DisplayDialog("Revoke a link", "Revoke the link " + token.Prefix + "…? The editor holding it is signed out.", "Revoke", "Keep")) return;
+            try
+            {
+                await purchases.Revoke(token.Id);
+                links[home] = await purchases.LinkedTokens();
+            }
+            catch (Exception e) { status = e.Message; }
+            Repaint();
+        }
+
         private void DrawSources()
         {
+            DrawLinkedForges();
             GUILayout.Label("Your own sources, used whatever the profile. Profiles and the project's presets are in the Profiles tab.", EditorStyles.wordWrappedMiniLabel);
             foreach (HubSource source in HubSources.All().Where(s => s.Type != HubSource.Profile && s.Type != HubSource.Package))
             {

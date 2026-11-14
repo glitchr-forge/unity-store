@@ -45,6 +45,10 @@ namespace Glitchr.Store.Tests
             /// <summary>The host rewords its texts after the quote.</summary>
             public bool Reworded;
             public readonly List<string> Locales = new List<string>();
+            /// <summary>A forge 1.1 with key_handed, a purchase's key again and the account's links.</summary>
+            public bool GapsClosed;
+            public int Rekeyed;
+            public bool SignedOut, OtherRevoked;
 
             public Dictionary<string, object> Consent(string locale)
             {
@@ -73,6 +77,7 @@ namespace Glitchr.Store.Tests
                     body["email"] = "jeanne@example.org";
                     body["registry"] = Forge + "/upm";
                 }
+                if (status == "paid" && GapsClosed) body["key_handed"] = true;
                 if (status == "requires_action") body["url"] = "https://bank.example.test/3ds/abc";
                 if (status == "refused") body["reason"] = "Your card was declined.";
 
@@ -89,8 +94,31 @@ namespace Glitchr.Store.Tests
 
             private HubHttp.Answer Route(string method, string url, object body, string bearer, string key)
             {
-                if (bearer != Token) return Answer(401, new Dictionary<string, object> { ["error"] = "unauthorized" });
+                if (bearer != Token || SignedOut) return Answer(401, new Dictionary<string, object> { ["error"] = "unauthorized" });
                 string path = url.Substring(Hub.Length);
+                if (GapsClosed && path.StartsWith("/account-tokens"))
+                {
+                    if (method == "GET" && path == "/account-tokens")
+                    {
+                        var tokens = new List<object> { new Dictionary<string, object> { ["id"] = 12, ["prefix"] = Token.Substring(0, 12), ["created"] = "2026-11-14T09:30:00+00:00", ["last_used"] = null, ["current"] = true } };
+                        if (!OtherRevoked) tokens.Add(new Dictionary<string, object> { ["id"] = 7, ["prefix"] = "gla_WXYZ-ABC", ["created"] = "2026-11-10T08:00:00+00:00", ["last_used"] = "2026-11-13T08:00:00+00:00", ["current"] = false });
+                        return Answer(200, new Dictionary<string, object> { ["tokens"] = tokens });
+                    }
+                    if (method == "DELETE" && path == "/account-tokens/current") { SignedOut = true; return Answer(204, null); }
+                    if (method == "DELETE" && path == "/account-tokens/7" && !OtherRevoked) { OtherRevoked = true; return Answer(204, null); }
+                    return Answer(404, new Dictionary<string, object> { ["error"] = "unknown_account_token" });
+                }
+                if (GapsClosed && method == "POST" && path.StartsWith("/purchases/") && path.EndsWith("/key"))
+                {
+                    string id = path.Substring("/purchases/".Length, 32);
+                    if (!Statuses.TryGetValue(id, out List<string> states)) return Answer(404, new Dictionary<string, object> { ["error"] = "unknown_purchase" });
+                    if (states[0] != "paid") return Answer(409, new Dictionary<string, object> { ["error"] = "purchase_not_paid", ["status"] = states[0] });
+                    Dictionary<string, object> again = Purchase(id, "paid");
+                    again["key"] = "glk_again" + (++Rekeyed);
+                    again["email"] = "jeanne@example.org";
+                    again["registry"] = Forge + "/upm";
+                    return Answer(200, again);
+                }
                 if (method == "GET" && path.StartsWith("/quote?"))
                 {
                     var query = path.Substring("/quote?".Length).Split('&').Select(p => p.Split('=')).Where(p => p.Length == 2).ToDictionary(p => p[0], p => p[1]);
@@ -243,6 +271,87 @@ namespace Glitchr.Store.Tests
             Assert.AreEqual("fr", HubPurchases.LanguageTag(UnityEngine.SystemLanguage.French));
             Assert.IsNull(HubPurchases.LanguageTag(UnityEngine.SystemLanguage.Unknown));
             Assert.DoesNotThrow(() => HubPurchases.EditorLanguage());
+        }
+
+        [Test]
+        public void ALostPaidAnswerIsFoundAgainAndItsKeyMadeAgain()
+        {
+            var forge = new FakeForge { Methods = { Card("pm_1") }, GapsClosed = true };
+            HubPurchases purchases = Purchases(forge);
+            PurchaseQuote quote = Sync(purchases.Quote(7));
+            PurchaseConfirmation sent = PurchaseConfirmation.Of(quote, "pm_1");
+            // The paid answer carrying the key never arrives: the forge handed it, this editor has none.
+            string id = 1.ToString("x32");
+            forge.ByKey[sent.Key] = id;
+            forge.Statuses[id] = new List<string> { "paid" };
+            forge.Handed.Add(id);
+
+            PurchaseOutcome replay = Sync(purchases.Buy(sent));
+            Assert.IsTrue(replay.What == PurchaseOutcome.Kind.Paid && replay.Replayed && !replay.KeyKept);
+            Assert.IsTrue(replay.KeyHanded);
+            Assert.IsTrue(replay.KeyLost, "handed by the forge, never received here");
+            Assert.AreEqual(id, replay.Id, "the replay gives the purchase's id back");
+
+            PurchaseOutcome again = Sync(purchases.KeyAgain(replay.Id));
+            Assert.IsTrue(again.KeyKept && !again.KeyLost);
+            CollectionAssert.AreEqual(new[] { (Forge + "/upm", "glk_again1") }, kept);
+            Sync(purchases.KeyAgain(replay.Id));
+            Assert.AreEqual("glk_again2", kept.Last().Key, "asked again: a newer key, kept in place of the other");
+
+            StringAssert.Contains("no such purchase", Assert.Throws<Exception>(() => Sync(purchases.KeyAgain(new string('f', 32)))).Message);
+            Assert.Throws<ArgumentException>(() => Sync(purchases.KeyAgain("../x")), "never sent");
+            forge.Statuses[new string('e', 32)] = new List<string> { "pending" };
+            StringAssert.Contains("not paid yet", Assert.Throws<Exception>(() => Sync(purchases.KeyAgain(new string('e', 32)))).Message);
+        }
+
+        [Test]
+        public void AKeyThatCannotBeWrittenIsAskedAgainAndAForgeWithoutKeyHandedLosesNothing()
+        {
+            var forge = new FakeForge { Methods = { Card("pm_1") }, GapsClosed = true };
+            var failing = new HubPurchases(Origin(), Token, forge, (registry, key) => throw new IOException("disk full"));
+            PurchaseOutcome paid = Sync(failing.Buy(PurchaseConfirmation.Of(Sync(failing.Quote(7)), "pm_1")));
+            Assert.AreEqual(PurchaseOutcome.Kind.Paid, paid.What, "paid all the same");
+            Assert.IsTrue(paid.KeyLost);
+            StringAssert.Contains("disk full", paid.KeyError);
+
+            var older = new FakeForge { Methods = { Card("pm_1") } };
+            HubPurchases purchases = Purchases(older);
+            PurchaseConfirmation sent = PurchaseConfirmation.Of(Sync(purchases.Quote(7)), "pm_1");
+            Sync(purchases.Buy(sent));
+            PurchaseOutcome replay = Sync(purchases.Buy(sent));
+            Assert.IsFalse(replay.KeyLost, "a forge 1.0: nothing to ask again");
+        }
+
+        [Test]
+        public void SigningOutRevokesTheLinkOnTheForgeThenForgetsIt()
+        {
+            HubOrigin origin = Origin();
+            origin.AccountTokensUrl = Hub + "/account-tokens";
+            Assert.AreEqual(Hub + "/account-tokens", HubPurchases.AccountTokensUrl(origin));
+            HubOrigin elsewhere = Origin();
+            elsewhere.AccountTokensUrl = "https://elsewhere.example.org/x";
+            Assert.IsNull(HubPurchases.AccountTokensUrl(elsewhere), "the token never goes to another host");
+
+            var forge = new FakeForge { GapsClosed = true };
+            AccountTokens.Keep(Forge, Token);
+            var purchases = new HubPurchases(origin, Token, forge);
+            List<LinkedToken> tokens = Sync(purchases.LinkedTokens());
+            Assert.AreEqual(2, tokens.Count);
+            Assert.IsTrue(tokens[0].Current && !tokens[1].Current);
+            StringAssert.StartsWith("this editor", tokens[0].Shown);
+            purchases.Revoke(7).GetAwaiter().GetResult();
+            StringAssert.Contains("not one of your account's", Assert.Throws<Exception>(() => purchases.Revoke(7).GetAwaiter().GetResult()).Message);
+
+            Assert.IsTrue(Sync(purchases.SignOut()), "revoked on the forge");
+            Assert.IsTrue(forge.SignedOut);
+            Assert.IsNull(AccountTokens.Get(Forge), "then forgotten here");
+
+            // A forge that lists no links: forgotten here only.
+            AccountTokens.Keep(Forge, Token);
+            var older = new FakeForge();
+            Assert.IsFalse(Sync(new HubPurchases(Origin(), Token, older).SignOut()));
+            Assert.IsNull(AccountTokens.Get(Forge));
+            Assert.IsEmpty(older.Requests, "nothing asked of a forge 1.0");
         }
 
         private string directory;

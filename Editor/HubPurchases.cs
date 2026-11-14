@@ -191,9 +191,41 @@ namespace Glitchr.Store
         /// <summary>The same confirmation was sent before: nothing charged again.</summary>
         public bool Replayed;
         public PurchaseConsent Consent;
+        /// <summary>The forge says the key went out (key_handed, forge 1.1).</summary>
+        public bool KeyHanded;
+        /// <summary>Paid, its key handed, but none kept here (the answer lost, or <see cref="KeyError"/>): <see cref="HubPurchases.KeyAgain"/>.</summary>
+        public bool KeyLost;
+        public string KeyError;
         public List<string> Missing = new List<string>();
         public bool Unasked;
         public string Amount => HubAmount.Format(Price, Currency);
+    }
+
+    /// <summary>A link of the account (an account token): its first characters only, never the token.</summary>
+    public sealed class LinkedToken
+    {
+        public long Id;
+        public string Prefix;
+        public string Created;
+        public string LastUsed;
+        public bool Current;
+
+        public static LinkedToken Of(object json)
+        {
+            if (!(Json.Get(json, "id") is double id)) return null;
+            return new LinkedToken
+            {
+                Id = (long)id,
+                Prefix = Json.String(Json.Get(json, "prefix")),
+                Created = Json.String(Json.Get(json, "created")),
+                LastUsed = Json.String(Json.Get(json, "last_used")),
+                Current = Json.Get(json, "current") is bool c && c,
+            };
+        }
+
+        public string Shown => (Current ? "this editor  ·  " : string.Empty) + Prefix + "…  ·  linked " + Date(Created) + (LastUsed != null ? "  ·  used " + Date(LastUsed) : string.Empty);
+
+        private static string Date(string iso) => iso != null && iso.Length >= 10 ? iso.Substring(0, 10) : iso ?? "?";
     }
 
     /// <summary>The forge refused the account token (401): it is forgotten, and the editor linked again.</summary>
@@ -380,6 +412,74 @@ namespace Glitchr.Store
         }
 
         /// <summary>
+        /// A new key of the buyer's seat on a paid purchase's licence, for a key that was lost:
+        /// the seat's previous key stops working at once. Kept in .upmconfig.toml in place of this
+        /// registry's key. Forge 1.1 (key_handed in a paid purchase).
+        /// </summary>
+        public async Task<PurchaseOutcome> KeyAgain(string id)
+        {
+            if (id == null || !PurchaseShape.IsMatch(id)) throw new ArgumentException("Not a purchase's id.");
+            HubHttp.Answer answer = await Send("POST", origin.PurchasesUrl.TrimEnd('/') + "/" + id + "/key");
+            if (answer.Status == 409)
+            {
+                switch (Json.String(Json.Get(Parse(answer), "error")))
+                {
+                    case "purchase_not_paid": throw new Exception("This purchase is not paid yet: its key comes with it once it is.");
+                    case "license_unavailable": throw new Exception("Its licence is no longer valid (expired, refunded or revoked), or you hold no seat on it any more: no key made.");
+                    case "purchase_in_progress": throw new Exception("Another purchase of yours is running on the forge: try again in a moment.");
+                    default: throw new Exception("The forge refused to make a new key.");
+                }
+            }
+            if (!answer.Ok) throw Refusal(answer);
+
+            return Outcome(answer, false, true);
+        }
+
+        /// <summary>The account's links (account tokens), newest first; Current: this editor's. Forge 1.1 (checkout.account_tokens).</summary>
+        public async Task<List<LinkedToken>> LinkedTokens()
+        {
+            string url = AccountTokensUrl(origin) ?? throw new InvalidOperationException("This forge lists no links.");
+            HubHttp.Answer answer = await Send("GET", url);
+            if (!answer.Ok) throw Refusal(answer);
+
+            return (Json.Array(Json.Get(Parse(answer), "tokens")) ?? new List<object>()).Select(LinkedToken.Of).Where(t => t != null).ToList();
+        }
+
+        /// <summary>
+        /// Signs this editor out: its token revoked on the forge when the forge lists its links (a
+        /// 401: already revoked), then forgotten here. True when the forge revoked it; false: forgotten
+        /// here only (a forge without account_tokens; the link stays on the account's page).
+        /// </summary>
+        public async Task<bool> SignOut()
+        {
+            string url = AccountTokensUrl(origin);
+            if (url != null)
+            {
+                HubHttp.Answer answer = await Send("DELETE", url.TrimEnd('/') + "/current");
+                if (!answer.Ok && answer.Status != 401) throw Refusal(answer);
+            }
+            AccountTokens.Forget(Authority(origin.TokenUrl));
+
+            return url != null;
+        }
+
+        /// <summary>Revokes another link of the account (another editor signed out from here).</summary>
+        public async Task Revoke(long id)
+        {
+            string url = AccountTokensUrl(origin) ?? throw new InvalidOperationException("This forge lists no links.");
+            HubHttp.Answer answer = await Send("DELETE", url.TrimEnd('/') + "/" + id);
+            if (answer.Status == 404) throw new Exception("That link is not one of your account's: nothing revoked.");
+            if (!answer.Ok) throw Refusal(answer);
+        }
+
+        /// <summary>The manifest's checkout.account_tokens, when it is on the host the device flow links with.</summary>
+        public static string AccountTokensUrl(HubOrigin origin)
+        {
+            string home = Authority(origin?.TokenUrl);
+            return home != null && Authority(origin.AccountTokensUrl) == home ? origin.AccountTokensUrl : null;
+        }
+
+        /// <summary>
         /// A language for the statements' texts as the forge takes it (fr, en_GB), from a tag
         /// ("fr-FR"); null for anything else - the forge's default then.
         /// </summary>
@@ -502,10 +602,21 @@ namespace Glitchr.Store
                     string registry = Json.String(Json.Get(j, "registry")) ?? origin.Registry;
                     if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(registry))
                     {
-                        keepKey(registry, key);
-                        outcome.KeyKept = true;
-                        outcome.Registry = registry;
+                        // A key that cannot be written is not an error of the purchase: it is paid,
+                        // and the key is asked again once the file can be written (never shown).
+                        try
+                        {
+                            keepKey(registry, key);
+                            outcome.KeyKept = true;
+                            outcome.Registry = registry;
+                        }
+                        catch (Exception e)
+                        {
+                            outcome.KeyError = "The key could not be written into " + UpmConfig.FilePath + ": " + e.Message;
+                        }
                     }
+                    outcome.KeyHanded = Json.Get(j, "key_handed") is bool handed && handed;
+                    outcome.KeyLost = !outcome.KeyKept && (outcome.KeyHanded || outcome.KeyError != null);
                     break;
                 case "requires_action":
                     outcome.What = PurchaseOutcome.Kind.RequiresAction;

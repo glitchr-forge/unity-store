@@ -111,3 +111,27 @@ them once it is saved; **Remove** deletes one (`DELETE <methods>/<id>`).
 Pages the Forge gives to open are opened only when they are `https`
 addresses without a user name (`http` on this machine only, for a
 development Forge).
+
+## A key that did not arrive, and signing out
+
+Since a Forge 1.1 (its paid purchases say `key_handed`, its manifest's
+`checkout` names `account_tokens`):
+
+- **A lost key.** The Forge hands a purchase's key over once. When a paid
+  answer reaches the window without it - the answer carrying it was lost and
+  Pay was pressed again (the same confirmation: the Forge answers the same
+  purchase), or `.upmconfig.toml` could not be written - the confirmation
+  says so and offers **Get the key again** (`POST <purchases>/<id>/key`). It
+  says first what that does: a new key for the user's seat on that licence,
+  **the previous key of that seat stops working at once** (another editor or
+  a Composer configuration using it needs the new one). The new key is
+  written in place of this registry's key. A Forge 1.0 never says
+  `key_handed`: nothing is offered.
+- **Signing out.** The Sources tab lists the forges this editor is linked to
+  (Linked forges). **Sign this editor out** revokes its account token on the
+  Forge (`DELETE <account_tokens>/current`), then forgets it here; licence
+  keys already kept still open the registry. **Show linked editors** lists
+  the account's links (their first characters and dates; the Forge does not
+  know which editor holds which) and **Revoke** signs another one out. A
+  Forge without `account_tokens`: the token is forgotten here only, and the
+  window says the link stays on the account's page there.

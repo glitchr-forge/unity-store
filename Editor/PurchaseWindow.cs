@@ -41,6 +41,8 @@ namespace Glitchr.Store
         private bool showMethods;
         private bool closed;
         private bool waiting;
+        /// <summary>Paid, but its key did not reach this editor: offered again.</summary>
+        private PurchaseOutcome lost;
         private int waitRound;
 
         /// <summary>The confirmation for that item; <paramref name="paid"/> is told once it is paid.</summary>
@@ -109,6 +111,18 @@ namespace Glitchr.Store
                 return;
             }
             if (!string.IsNullOrEmpty(note)) EditorGUILayout.HelpBox(note, noteType);
+            if (lost != null)
+            {
+                EditorGUILayout.HelpBox("Paid" + (lost.Replayed ? " (nothing charged again)" : string.Empty) + ", but its licence key did not reach this editor" + (lost.KeyError != null ? ": " + lost.KeyError : "."), MessageType.Warning);
+                EditorGUILayout.LabelField("Getting the key again makes a new key for your seat on this licence. The previous key of that seat stops working at once: another editor or a Composer configuration that uses it will need the new one.", EditorStyles.wordWrappedLabel);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    GUILayout.FlexibleSpace();
+                    if (GUILayout.Button("Later", GUILayout.Width(90))) Close();
+                    if (GUILayout.Button("Get the key again", GUILayout.Width(150))) KeyAgain();
+                }
+                return;
+            }
             if (quote == null)
             {
                 using (new EditorGUILayout.HorizontalScope())
@@ -272,6 +286,32 @@ namespace Glitchr.Store
             Settle(outcome);
         }
 
+        private async void KeyAgain()
+        {
+            busy = "Asking " + (item.Origin?.HubName ?? "the forge") + " for a new key…";
+            Repaint();
+            try
+            {
+                PurchaseOutcome again = await purchases.KeyAgain(lost.Id);
+                busy = null;
+                if (again.KeyKept)
+                {
+                    lost = null;
+                    Close();
+                    paid?.Invoke(item, again);
+                    return;
+                }
+                lost = again;
+            }
+            catch (Exception e)
+            {
+                busy = null;
+                note = e.Message;
+                noteType = MessageType.Error;
+            }
+            if (!closed) Repaint();
+        }
+
         private void Settle(PurchaseOutcome outcome)
         {
             busy = null;
@@ -280,6 +320,12 @@ namespace Glitchr.Store
             switch (outcome.What)
             {
                 case PurchaseOutcome.Kind.Paid:
+                    if (outcome.KeyLost)
+                    {
+                        lost = outcome;
+                        note = null;
+                        break;
+                    }
                     Close();
                     paid?.Invoke(item, outcome);
                     return;

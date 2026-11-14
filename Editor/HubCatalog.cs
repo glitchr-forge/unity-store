@@ -120,6 +120,8 @@ namespace Glitchr.Store
         public string QuoteUrl;
         public string PurchasesUrl;
         public string MethodsUrl;
+        /// <summary>The account's links and signing out (checkout.account_tokens, forge 1.1).</summary>
+        public string AccountTokensUrl;
         public HubTheme Theme;
         /// <summary>The store whose key signs this item's licences (see <see cref="KeyPins"/>).</summary>
         public string Store;
@@ -435,6 +437,7 @@ namespace Glitchr.Store
                 QuoteUrl = Json.String(Json.Get(manifest, "checkout", "quote")),
                 PurchasesUrl = Json.String(Json.Get(manifest, "checkout", "purchases")),
                 MethodsUrl = Json.String(Json.Get(manifest, "checkout", "methods")),
+                AccountTokensUrl = Json.String(Json.Get(manifest, "checkout", "account_tokens")),
             };
             string catalog = Json.String(Json.Get(entry, "catalog"));
             if (!string.IsNullOrEmpty(catalog)) catalogs.Add(catalog);

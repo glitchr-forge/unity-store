@@ -4,6 +4,41 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-11-14
+
+### Added
+
+- **A key that did not arrive** (forge 1.1: `key_handed`, `POST
+  purchases/<id>/key`). A paid answer without the key while the Forge says
+  it was handed - a lost answer found again by sending the same confirmation
+  (the Forge answers the same purchase and its id) - or a key that could not
+  be written into `.upmconfig.toml` (the purchase stays paid; `KeyError`) is
+  `PurchaseOutcome.KeyLost`. The confirmation then offers **Get the key
+  again**, saying first that the seat's previous key stops working at once;
+  the new key is written in place of the registry's key
+  (`HubPurchases.KeyAgain`; `purchase_not_paid`, `license_unavailable`,
+  `purchase_in_progress` said in a sentence). A Forge 1.0 offers nothing.
+- **Signing out** (forge 1.1: `checkout.account_tokens`). The Sources tab
+  lists the linked forges: **Sign this editor out** revokes the account token
+  on the Forge, then forgets it here (`HubPurchases.SignOut`); **Show linked
+  editors** lists the account's links (`LinkedToken`: prefix, dates, this
+  editor) and **Revoke** signs another out. A Forge without `account_tokens`:
+  forgotten here only, and said so. `HubOrigin.AccountTokensUrl`, used only
+  on the host of `checkout.token`.
+
+### Not here
+
+- The licences read with the account token: Forge Store lists no Forge
+  licences (Forge Hub's Licences tab does).
+
+### Tests
+
+- Three new EditMode tests against the fake Forge, now answering as forge 1.1
+  (key_handed, the key again twice, an unknown or unpaid purchase, a key that
+  cannot be written, a forge 1.0's replay, the links listed and revoked,
+  signing out with and without account_tokens): 91/91 in Unity 6000.3.28f1
+  batch mode with Forge Seal, 77 + 3 skipped without.
+
 ## [1.8.0] - 2026-11-14
 
 ### Added
