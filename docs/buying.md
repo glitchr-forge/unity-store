@@ -75,6 +75,34 @@ knows the editor: the token is forgotten and Buy links the editor again.
    - an unknown offer, payments unavailable, a reused key: said in a
      sentence, nothing charged.
 
+### The statements: terms of sale and withdrawal
+
+A Forge 1.1 asks its buyer, before paying, for statements the law requires
+for digital content supplied at once: the terms of sale accepted, immediate
+supply asked for and the right of withdrawal waived (Code de la
+consommation L221-28 13°). Its quote gives them (`consent`), worded by the
+Forge in the editor's language (Preferences > Languages, else the system's;
+sent as `?locale=`, e.g. `fr`, `zh_CN`).
+
+- The confirmation shows each statement **as the Forge words it** - the
+  window adds no wording of its own -, each with its own box, **none ticked**;
+  a statement with a link (the terms of sale) has a **Read** button that opens
+  it in the browser (https only). A text that does not match the hash the
+  Forge gives beside it is not shown, and the purchase cannot go on.
+- **Pay** stays disabled until every box is ticked. The purchase sends
+  `consent` `{"version", "locale", "<statement id>": true...}`: the version
+  and language shown, unchanged.
+- **409 `consent_changed`**: the Forge's texts changed since they were shown
+  (reworded, another language). Nothing is charged; the new texts are shown,
+  every box unticked, and Pay makes a new confirmation (a new key).
+- **422 `consent_required`**: a statement was not ticked - the boxes are shown
+  again. From a Forge whose quote gave no statements, the window says so: the
+  Forge asks statements its confirmation did not give, nothing was charged,
+  buy on its page.
+- A Forge whose quote has no `consent` (1.0), or an empty list, is bought
+  from as before: nothing is sent.
+- Nothing is remembered: every purchase asks again.
+
 Payment methods are listed in the confirmation (**Payment methods**):
 **Add a payment method** asks the Forge for its payment provider's page
 (`POST <methods>`) and opens it in the browser - the card is entered there,

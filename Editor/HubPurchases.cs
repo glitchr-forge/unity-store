@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -43,6 +45,72 @@ namespace Glitchr.Store
         public string Shown => (Label ?? Id) + (Expires != null ? "  ·  " + Expires : string.Empty) + (Expired ? "  ·  expired" : string.Empty);
     }
 
+    /// <summary>A statement its buyer makes by ticking its box: the forge's text, shown as it is.</summary>
+    public sealed class PurchaseStatement
+    {
+        public string Id;
+        public string Text;
+        public string Hash;
+        /// <summary>A page to link beside the text (the terms of sale), opened when https.</summary>
+        public string Url;
+    }
+
+    /// <summary>
+    /// What the forge asks its buyer to state before paying (the quote's consent, omnibase/forge
+    /// 1.1): the terms of sale accepted, immediate supply asked for and the right of withdrawal
+    /// waived. Shown one box each, none ticked; sent back with the version and language shown.
+    /// </summary>
+    public sealed class PurchaseConsent
+    {
+        public bool Required;
+        public string Version;
+        public string Locale;
+        public string TermsUrl;
+        public List<PurchaseStatement> Statements = new List<PurchaseStatement>();
+
+        /// <summary>The forge's consent, each text checked against its hash (SHA-256 hex); null for a forge that gives none.</summary>
+        public static PurchaseConsent Of(object json)
+        {
+            if (Json.Object(json) == null) return null;
+            var consent = new PurchaseConsent
+            {
+                Required = Json.Get(json, "required") is bool r && r,
+                Version = Json.String(Json.Get(json, "version")) ?? string.Empty,
+                Locale = Json.String(Json.Get(json, "locale")) ?? string.Empty,
+                TermsUrl = Json.String(Json.Get(json, "terms_url")),
+            };
+            foreach (object s in Json.Array(Json.Get(json, "statements")) ?? new List<object>())
+            {
+                var statement = new PurchaseStatement { Id = Json.String(Json.Get(s, "id")), Text = Json.String(Json.Get(s, "text")), Hash = Json.String(Json.Get(s, "hash")), Url = Json.String(Json.Get(s, "url")) };
+                if (string.IsNullOrEmpty(statement.Id) || string.IsNullOrWhiteSpace(statement.Text)) throw new Exception("The forge gave a statement without its text.");
+                if (!string.Equals(Sha256(statement.Text), statement.Hash, StringComparison.OrdinalIgnoreCase)) throw new Exception("The forge's statement \"" + statement.Id + "\" does not match its hash: not shown.");
+                consent.Statements.Add(statement);
+            }
+
+            return consent;
+        }
+
+        public bool AllTicked(ICollection<string> ticked) => Statements.All(s => ticked != null && ticked.Contains(s.Id));
+
+        /// <summary>What the purchase sends: the version and language shown, each ticked statement true; null when nothing is asked.</summary>
+        public Dictionary<string, object> Sent(ICollection<string> ticked)
+        {
+            if (Statements.Count == 0) return null;
+            var body = new Dictionary<string, object> { ["version"] = Version, ["locale"] = Locale };
+            foreach (PurchaseStatement s in Statements.Where(s => ticked != null && ticked.Contains(s.Id))) body[s.Id] = true;
+
+            return body;
+        }
+
+        private static string Sha256(string text)
+        {
+            using (SHA256 sha = SHA256.Create())
+            {
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", string.Empty).ToLowerInvariant();
+            }
+        }
+    }
+
     /// <summary>What buying an offer charges this user now: what the confirmation shows.</summary>
     public sealed class PurchaseQuote
     {
@@ -57,6 +125,8 @@ namespace Glitchr.Store
         public string Currency;
         /// <summary>The saved method it would be charged to; null: none saved.</summary>
         public PaymentMethod Method;
+        /// <summary>The statements to tick before paying; null: a forge that asks none (1.0).</summary>
+        public PurchaseConsent Consent;
         public string Amount => HubAmount.Format(Price, Currency);
     }
 
@@ -70,8 +140,15 @@ namespace Glitchr.Store
         public string Method;
         /// <summary>The confirmation's idempotency key, the same on each of its retries.</summary>
         public string Key = HubPurchases.NewKey();
+        /// <summary>The statements shown, and the ids of the boxes its user ticked.</summary>
+        public PurchaseConsent Consent;
+        public HashSet<string> Ticked = new HashSet<string>();
 
-        public static PurchaseConfirmation Of(PurchaseQuote quote, string method) => new PurchaseConfirmation { Offer = quote.Offer, Price = quote.Price, Currency = quote.Currency, Method = method };
+        public static PurchaseConfirmation Of(PurchaseQuote quote, string method, IEnumerable<string> ticked = null) => new PurchaseConfirmation
+        {
+            Offer = quote.Offer, Price = quote.Price, Currency = quote.Currency, Method = method,
+            Consent = quote.Consent, Ticked = new HashSet<string>(ticked ?? Enumerable.Empty<string>()),
+        };
     }
 
     /// <summary>Where a purchase stands.</summary>
@@ -93,6 +170,10 @@ namespace Glitchr.Store
             MethodRequired,
             /// <summary>Another purchase of this user is still running: retry the same confirmation.</summary>
             InProgress,
+            /// <summary>The statements sent are not the texts now: show <see cref="Consent"/>, untick, confirm again with a new key.</summary>
+            ConsentChanged,
+            /// <summary>The forge refuses without the statements (<see cref="Missing"/>); <see cref="Unasked"/>: the confirmation showed none.</summary>
+            ConsentRequired,
         }
 
         public Kind What;
@@ -109,6 +190,9 @@ namespace Glitchr.Store
         public string Registry;
         /// <summary>The same confirmation was sent before: nothing charged again.</summary>
         public bool Replayed;
+        public PurchaseConsent Consent;
+        public List<string> Missing = new List<string>();
+        public bool Unasked;
         public string Amount => HubAmount.Format(Price, Currency);
     }
 
@@ -246,10 +330,11 @@ namespace Glitchr.Store
         }
 
         /// <summary>What the offer charges this user now, for the confirmation; nothing is charged. Refused while the store's key waits.</summary>
-        public async Task<PurchaseQuote> Quote(long offer)
+        public async Task<PurchaseQuote> Quote(long offer, string language = null)
         {
             Gate();
-            HubHttp.Answer answer = await Send("GET", origin.QuoteUrl + (origin.QuoteUrl.Contains("?") ? "&" : "?") + "offer=" + offer);
+            string locale = Locale(language);
+            HubHttp.Answer answer = await Send("GET", origin.QuoteUrl + (origin.QuoteUrl.Contains("?") ? "&" : "?") + "offer=" + offer + (locale != null ? "&locale=" + locale : string.Empty));
             if (!answer.Ok) throw Refusal(answer);
             object j = Parse(answer);
             if (!(Json.Get(j, "price") is double price)) throw new Exception("The forge gave no price.");
@@ -266,6 +351,7 @@ namespace Glitchr.Store
                 Price = (long)price,
                 Currency = currency.ToUpperInvariant(),
                 Method = Json.Get(j, "method") == null ? null : PaymentMethod.Of(Json.Get(j, "method")),
+                Consent = PurchaseConsent.Of(Json.Get(j, "consent")),
             };
         }
 
@@ -276,10 +362,12 @@ namespace Glitchr.Store
             if (confirmed?.Key == null || !KeyShape.IsMatch(confirmed.Key)) throw new ArgumentException("Not a confirmation key.");
             var body = new Dictionary<string, object> { ["offer"] = confirmed.Offer, ["price"] = confirmed.Price, ["currency"] = confirmed.Currency };
             if (!string.IsNullOrEmpty(confirmed.Method)) body["method"] = confirmed.Method;
+            Dictionary<string, object> consent = confirmed.Consent?.Sent(confirmed.Ticked);
+            if (consent != null) body["consent"] = consent;
             HubHttp.Answer answer = await Send("POST", origin.PurchasesUrl, body, new Dictionary<string, string> { ["Idempotency-Key"] = confirmed.Key });
 
             // 200 rather than 201: the same confirmation sent before; nothing charged again.
-            return Outcome(answer, answer.Status == 200);
+            return Outcome(answer, answer.Status == 200, confirmed.Consent != null && confirmed.Consent.Statements.Count > 0);
         }
 
         /// <summary>Where a purchase stands now (asked every few seconds while it waits); its first answer once paid hands the key over.</summary>
@@ -288,7 +376,67 @@ namespace Glitchr.Store
             if (id == null || !PurchaseShape.IsMatch(id)) throw new ArgumentException("Not a purchase's id.");
             HubHttp.Answer answer = await Send("GET", origin.PurchasesUrl.TrimEnd('/') + "/" + id);
 
-            return Outcome(answer, false);
+            return Outcome(answer, false, true);
+        }
+
+        /// <summary>
+        /// A language for the statements' texts as the forge takes it (fr, en_GB), from a tag
+        /// ("fr-FR"); null for anything else - the forge's default then.
+        /// </summary>
+        public static string Locale(string tag)
+        {
+            string[] parts = (tag ?? string.Empty).Trim().Split('-', '_');
+            if (!Regex.IsMatch(parts[0], "^[A-Za-z]{2,3}$")) return null;
+            string language = parts[0].ToLowerInvariant();
+
+            return parts.Length == 2 && Regex.IsMatch(parts[1], "^[A-Za-z]{2,4}$") ? language + "_" + parts[1].ToUpperInvariant() : language;
+        }
+
+        /// <summary>The editor's language (Preferences > Languages), else the system's, as a tag; null when unknown.</summary>
+        public static string EditorLanguage()
+        {
+            UnityEngine.SystemLanguage language = UnityEngine.Application.systemLanguage;
+            try
+            {
+                // UnityEditor.LocalizationDatabase is internal: read by reflection, the system's language when it is not there.
+                Type database = typeof(UnityEditor.EditorWindow).Assembly.GetType("UnityEditor.LocalizationDatabase");
+                object current = database?.GetProperty("currentEditorLanguage", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)?.GetValue(null);
+                if (current is UnityEngine.SystemLanguage editor) language = editor;
+            }
+            catch (Exception)
+            {
+                // the system's language
+            }
+
+            return LanguageTag(language);
+        }
+
+        public static string LanguageTag(UnityEngine.SystemLanguage language)
+        {
+            switch (language)
+            {
+                case UnityEngine.SystemLanguage.English: return "en";
+                case UnityEngine.SystemLanguage.French: return "fr";
+                case UnityEngine.SystemLanguage.German: return "de";
+                case UnityEngine.SystemLanguage.Spanish: return "es";
+                case UnityEngine.SystemLanguage.Italian: return "it";
+                case UnityEngine.SystemLanguage.Portuguese: return "pt";
+                case UnityEngine.SystemLanguage.Dutch: return "nl";
+                case UnityEngine.SystemLanguage.Japanese: return "ja";
+                case UnityEngine.SystemLanguage.Korean: return "ko";
+                case UnityEngine.SystemLanguage.ChineseSimplified: return "zh_CN";
+                case UnityEngine.SystemLanguage.ChineseTraditional: return "zh_TW";
+                case UnityEngine.SystemLanguage.Chinese: return "zh";
+                case UnityEngine.SystemLanguage.Russian: return "ru";
+                case UnityEngine.SystemLanguage.Polish: return "pl";
+                case UnityEngine.SystemLanguage.Swedish: return "sv";
+                case UnityEngine.SystemLanguage.Danish: return "da";
+                case UnityEngine.SystemLanguage.Norwegian: return "no";
+                case UnityEngine.SystemLanguage.Finnish: return "fi";
+                case UnityEngine.SystemLanguage.Czech: return "cs";
+                case UnityEngine.SystemLanguage.Turkish: return "tr";
+                default: return null;
+            }
         }
 
         private void Gate()
@@ -299,7 +447,7 @@ namespace Glitchr.Store
             }
         }
 
-        private PurchaseOutcome Outcome(HubHttp.Answer answer, bool replayed)
+        private PurchaseOutcome Outcome(HubHttp.Answer answer, bool replayed, bool shown)
         {
             object j = Parse(answer);
             string error = Json.String(Json.Get(j, "error"));
@@ -316,6 +464,21 @@ namespace Glitchr.Store
             }
             if (answer.Status == 409 && error == "payment_method_required") return new PurchaseOutcome { What = PurchaseOutcome.Kind.MethodRequired };
             if (answer.Status == 409 && error == "purchase_in_progress") return new PurchaseOutcome { What = PurchaseOutcome.Kind.InProgress };
+            if (answer.Status == 409 && error == "consent_changed")
+            {
+                PurchaseConsent now = PurchaseConsent.Of(Json.Get(j, "consent")) ?? throw new Exception("The statements changed, and the forge gave no new ones.");
+                return new PurchaseOutcome { What = PurchaseOutcome.Kind.ConsentChanged, Consent = now };
+            }
+            if (answer.Status == 422 && error == "consent_required")
+            {
+                return new PurchaseOutcome
+                {
+                    What = PurchaseOutcome.Kind.ConsentRequired,
+                    Consent = PurchaseConsent.Of(Json.Get(j, "consent")),
+                    Missing = (Json.Array(Json.Get(j, "missing")) ?? new List<object>()).OfType<string>().ToList(),
+                    Unasked = !shown,
+                };
+            }
             if (!answer.Ok && answer.Status != 402) throw Refusal(answer);
 
             var outcome = new PurchaseOutcome

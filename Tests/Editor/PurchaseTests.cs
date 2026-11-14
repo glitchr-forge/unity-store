@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using NUnit.Framework;
 
@@ -36,6 +38,29 @@ namespace Glitchr.Store.Tests
             public readonly Dictionary<string, List<string>> Statuses = new Dictionary<string, List<string>>();
             public readonly HashSet<string> Handed = new HashSet<string>();
             public readonly List<Seen> Requests = new List<Seen>();
+            /// <summary>The statements this forge asks (1.1): id, English, French; null: a 1.0 forge.</summary>
+            public List<(string Id, string En, string Fr)> Statements;
+            /// <summary>Asked at the purchase although the quote gives none.</summary>
+            public bool HiddenConsent;
+            /// <summary>The host rewords its texts after the quote.</summary>
+            public bool Reworded;
+            public readonly List<string> Locales = new List<string>();
+
+            public Dictionary<string, object> Consent(string locale)
+            {
+                bool fr = (locale ?? string.Empty).StartsWith("fr");
+                var statements = new List<object>();
+                foreach (var (id, en, frText) in Statements)
+                {
+                    string text = (fr ? frText : en) + (Reworded ? " (v2)" : string.Empty);
+                    var statement = new Dictionary<string, object> { ["id"] = id, ["text"] = text, ["hash"] = Sha(text) };
+                    if (id == "terms") statement["url"] = "https://shop.example.com/terms";
+                    statements.Add(statement);
+                }
+                string version = Sha(string.Concat(statements.Select(st => Json.Get(st, "id") + ":" + Json.Get(st, "hash"))));
+
+                return new Dictionary<string, object> { ["required"] = true, ["version"] = version, ["locale"] = fr ? "fr" : "en", ["terms_url"] = "https://shop.example.com/terms", ["statements"] = statements };
+            }
 
             private static HubHttp.Answer Answer(long status, object body) => new HubHttp.Answer { Status = status, Text = body == null ? null : Json.Write(body) };
 
@@ -68,10 +93,14 @@ namespace Glitchr.Store.Tests
                 string path = url.Substring(Hub.Length);
                 if (method == "GET" && path.StartsWith("/quote?"))
                 {
-                    if (path != "/quote?offer=7") return Answer(404, new Dictionary<string, object> { ["error"] = "unknown_offer" });
+                    var query = path.Substring("/quote?".Length).Split('&').Select(p => p.Split('=')).Where(p => p.Length == 2).ToDictionary(p => p[0], p => p[1]);
+                    if (!query.TryGetValue("offer", out string offer) || offer != "7") return Answer(404, new Dictionary<string, object> { ["error"] = "unknown_offer" });
+                    Locales.Add(query.TryGetValue("locale", out string l) ? l : null);
                     object usable = Methods.FirstOrDefault(m => !(Json.Get(m, "expired") is bool e && e));
+                    var quote = new Dictionary<string, object> { ["offer"] = 7, ["title"] = "Example Tool, one seat", ["software"] = "example-tool", ["package"] = "com.example.tool", ["store"] = "Atelier Exemple", ["price"] = Price, ["currency"] = "EUR", ["method"] = usable };
+                    if (Statements != null && !HiddenConsent) quote["consent"] = Consent(query.TryGetValue("locale", out string asked) ? asked : "en");
 
-                    return Answer(200, new Dictionary<string, object> { ["offer"] = 7, ["title"] = "Example Tool, one seat", ["software"] = "example-tool", ["package"] = "com.example.tool", ["store"] = "Atelier Exemple", ["price"] = Price, ["currency"] = "EUR", ["method"] = usable });
+                    return Answer(200, quote);
                 }
                 if (method == "GET" && path == "/payment-methods") return Answer(200, new Dictionary<string, object> { ["gateway"] = "stripe", ["methods"] = Methods });
                 if (method == "POST" && path == "/payment-methods") return Answer(201, new Dictionary<string, object> { ["id"] = "cs_1", ["url"] = "https://checkout.provider.example.test/setup/cs_1" });
@@ -90,6 +119,16 @@ namespace Glitchr.Store.Tests
                     if (!(Json.Get(body, "price") is long confirmed) || confirmed != Price || (string)Json.Get(body, "currency") != "EUR")
                     {
                         return Answer(409, new Dictionary<string, object> { ["error"] = "price_changed", ["offer"] = 7, ["price"] = Price, ["currency"] = "EUR" });
+                    }
+                    if (Statements != null)
+                    {
+                        object sent = Json.Get(body, "consent");
+                        Dictionary<string, object> now = Consent(Json.Get(sent, "locale") as string ?? "en");
+                        List<string> ids = Statements.Select(st => st.Id).ToList();
+                        if (sent == null) return Answer(422, new Dictionary<string, object> { ["error"] = "consent_required", ["missing"] = ids.Cast<object>().ToList(), ["consent"] = now });
+                        if ((string)Json.Get(sent, "version") != (string)now["version"]) return Answer(409, new Dictionary<string, object> { ["error"] = "consent_changed", ["consent"] = now });
+                        List<object> missing = ids.Where(id => !(Json.Get(sent, id) is bool b && b)).Cast<object>().ToList();
+                        if (missing.Count > 0) return Answer(422, new Dictionary<string, object> { ["error"] = "consent_required", ["missing"] = missing, ["consent"] = now });
                     }
                     string id = (ByKey.Count + 1).ToString("x32");
                     ByKey[key] = id;
@@ -115,6 +154,95 @@ namespace Glitchr.Store.Tests
 
                 return Answer(404, new Dictionary<string, object> { ["error"] = "not here" });
             }
+        }
+
+        private static string Sha(string text)
+        {
+            using (SHA256 sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", string.Empty).ToLowerInvariant();
+        }
+
+        private static readonly (string, string, string) Terms = ("terms", "I have read and accept the terms of sale.", "J'ai lu et j'accepte les conditions générales de vente.");
+        private static readonly (string, string, string) Supply = ("immediate_supply",
+            "I ask for the digital content to be supplied immediately, as soon as I pay, and I acknowledge that I thereby lose my right of withdrawal.",
+            "Je demande la fourniture immédiate du contenu numérique, dès le paiement, et je reconnais perdre ainsi mon droit de rétractation.");
+
+        private static object LastPurchaseBody(FakeForge forge) => forge.Requests.Last(r => r.Method == "POST" && r.Url.EndsWith("/purchases")).Body;
+
+        [Test]
+        public void TheStatementsAreShownAsTheForgeWordsThemAndSentBackTicked()
+        {
+            var forge = new FakeForge { Methods = { Card("pm_1") }, Statements = new List<(string, string, string)> { Terms, Supply } };
+            HubPurchases purchases = Purchases(forge);
+            PurchaseQuote quote = Sync(purchases.Quote(7, "fr-FR"));
+            CollectionAssert.AreEqual(new[] { "fr_FR" }, forge.Locales, "the editor's language, as the forge takes it");
+            Assert.IsTrue(quote.Consent.Required);
+            Assert.AreEqual("fr", quote.Consent.Locale);
+            CollectionAssert.AreEqual(new[] { "terms", "immediate_supply" }, quote.Consent.Statements.Select(st => st.Id), "in the forge's order");
+            Assert.AreEqual(Supply.Item3, quote.Consent.Statements[1].Text, "the forge's text, word for word");
+            Assert.AreEqual("https://shop.example.com/terms", quote.Consent.Statements[0].Url);
+            Assert.IsFalse(quote.Consent.AllTicked(new[] { "terms" }), "Pay waits for every box");
+
+            // One box ticked only: refused, nothing charged.
+            PurchaseOutcome refused = Sync(purchases.Buy(PurchaseConfirmation.Of(quote, "pm_1", new[] { "terms" })));
+            Assert.AreEqual(PurchaseOutcome.Kind.ConsentRequired, refused.What);
+            CollectionAssert.AreEqual(new[] { "immediate_supply" }, refused.Missing);
+            Assert.IsFalse(refused.Unasked);
+            object sent = Json.Get(LastPurchaseBody(forge), "consent");
+            Assert.AreEqual("{\"version\":\"" + quote.Consent.Version + "\",\"locale\":\"fr\",\"terms\":true}", Json.Write(sent), "true for what was ticked, nothing for the rest");
+
+            PurchaseOutcome paid = Sync(purchases.Buy(PurchaseConfirmation.Of(quote, "pm_1", new[] { "terms", "immediate_supply" })));
+            Assert.AreEqual(PurchaseOutcome.Kind.Paid, paid.What);
+            Assert.AreEqual(true, Json.Get(LastPurchaseBody(forge), "consent", "immediate_supply"), "JSON true");
+            Assert.AreEqual(1, forge.ByKey.Count);
+        }
+
+        [Test]
+        public void TextsChangedAfterTheQuoteAreShownAgainAndConfirmedWithANewKey()
+        {
+            var forge = new FakeForge { Methods = { Card("pm_1") }, Statements = new List<(string, string, string)> { Supply } };
+            HubPurchases purchases = Purchases(forge);
+            PurchaseQuote quote = Sync(purchases.Quote(7, "en"));
+            forge.Reworded = true;
+            PurchaseConfirmation first = PurchaseConfirmation.Of(quote, "pm_1", new[] { "immediate_supply" });
+            PurchaseOutcome changed = Sync(purchases.Buy(first));
+            Assert.AreEqual(PurchaseOutcome.Kind.ConsentChanged, changed.What);
+            StringAssert.EndsWith("(v2)", changed.Consent.Statements[0].Text, "the texts now");
+            Assert.AreNotEqual(quote.Consent.Version, changed.Consent.Version);
+            Assert.AreEqual(0, forge.ByKey.Count, "nothing charged, no purchase");
+
+            quote.Consent = changed.Consent;
+            PurchaseConfirmation again = PurchaseConfirmation.Of(quote, "pm_1", new[] { "immediate_supply" });
+            Assert.AreNotEqual(first.Key, again.Key);
+            Assert.AreEqual(PurchaseOutcome.Kind.Paid, Sync(purchases.Buy(again)).What);
+        }
+
+        [Test]
+        public void AForgeThatAsksStatementsItsQuoteDidNotGiveIsSaidPlainly()
+        {
+            var forge = new FakeForge { Methods = { Card("pm_1") }, Statements = new List<(string, string, string)> { Supply }, HiddenConsent = true };
+            HubPurchases purchases = Purchases(forge);
+            PurchaseQuote quote = Sync(purchases.Quote(7));
+            Assert.IsNull(quote.Consent, "as a 1.0 forge's quote");
+            PurchaseOutcome refused = Sync(purchases.Buy(PurchaseConfirmation.Of(quote, "pm_1")));
+            Assert.AreEqual(PurchaseOutcome.Kind.ConsentRequired, refused.What);
+            Assert.IsTrue(refused.Unasked, "the confirmation showed none");
+            Assert.IsNull(Json.Get(LastPurchaseBody(forge), "consent"), "nothing sent when nothing was shown");
+        }
+
+        [Test]
+        public void AStatementThatDoesNotMatchItsHashIsNotShownAndLanguagesAreRead()
+        {
+            StringAssert.Contains("does not match its hash", Assert.Throws<Exception>(() => PurchaseConsent.Of(Json.Parse("{\"required\":true,\"version\":\"v\",\"locale\":\"en\",\"statements\":[{\"id\":\"terms\",\"text\":\"I accept.\",\"hash\":\"00\"}]}"))).Message);
+            Assert.IsNull(PurchaseConsent.Of(null), "a 1.0 forge");
+            Assert.IsNull(PurchaseConsent.Of(Json.Parse("{\"required\":false,\"version\":\"\",\"locale\":\"\",\"statements\":[]}")).Sent(new string[0]), "nothing asked: nothing sent");
+            Assert.AreEqual("fr_FR", HubPurchases.Locale("fr-FR"));
+            Assert.AreEqual("en", HubPurchases.Locale("en"));
+            Assert.AreEqual("zh", HubPurchases.Locale("zh-Hant-TW"), "a script and a region: the language alone");
+            Assert.IsNull(HubPurchases.Locale("x"));
+            Assert.IsNull(HubPurchases.Locale("fr&offer=8"));
+            Assert.AreEqual("fr", HubPurchases.LanguageTag(UnityEngine.SystemLanguage.French));
+            Assert.IsNull(HubPurchases.LanguageTag(UnityEngine.SystemLanguage.Unknown));
+            Assert.DoesNotThrow(() => HubPurchases.EditorLanguage());
         }
 
         private string directory;

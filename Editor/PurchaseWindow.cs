@@ -14,6 +14,11 @@ namespace Glitchr.Store
     /// (409 price_changed) is shown and asked again; a bank that asks its buyer (3-D Secure) opens
     /// in the browser, and the purchase is asked about until it is settled. Payment methods are
     /// saved on the provider's own page (the browser), listed and removed here.
+    /// The statements the forge asks before paying (its quote's consent: terms of sale, immediate
+    /// supply and the loss of the right of withdrawal) are shown as it words them, in the editor's
+    /// language, each with its own box, none ticked; Pay waits for every box. Texts that changed
+    /// meanwhile (409 consent_changed) are shown again, unticked. Nothing is remembered from one
+    /// purchase to the next.
     /// </summary>
     public sealed class PurchaseWindow : EditorWindow
     {
@@ -26,6 +31,9 @@ namespace Glitchr.Store
         private List<PaymentMethod> methods = new List<PaymentMethod>();
         private string method;
         private PurchaseConfirmation confirmation;
+        /// <summary>The statements' boxes ticked for this confirmation only.</summary>
+        private readonly HashSet<string> ticked = new HashSet<string>();
+        private GUIStyle statementStyle;
         private string note;
         private MessageType noteType = MessageType.Info;
         private string busy;
@@ -64,7 +72,8 @@ namespace Glitchr.Store
             try
             {
                 long offer = item.Offers[Mathf.Clamp(offerIndex, 0, item.Offers.Count - 1)].Id;
-                quote = await purchases.Quote(offer);
+                quote = await purchases.Quote(offer, HubPurchases.EditorLanguage());
+                ticked.Clear();
                 methods = await purchases.Methods();
                 if (!Usable.Any(m => m.Id == method)) method = quote.Method?.Id ?? Usable.FirstOrDefault()?.Id;
                 note = message;
@@ -140,6 +149,9 @@ namespace Glitchr.Store
                 EditorGUILayout.LabelField("Paid with", usable.Count == 1 ? usable[0].Label ?? usable[0].Id : "no saved payment method");
             }
 
+            List<PurchaseStatement> statements = quote.Consent?.Statements ?? new List<PurchaseStatement>();
+            if (statements.Count > 0) DrawStatements(statements);
+
             showMethods = EditorGUILayout.Foldout(showMethods || usable.Count == 0, "Payment methods", true);
             if (showMethods || usable.Count == 0) DrawMethods();
 
@@ -148,11 +160,34 @@ namespace Glitchr.Store
             {
                 GUILayout.FlexibleSpace();
                 if (GUILayout.Button("Cancel", GUILayout.Width(90))) Close();
-                using (new EditorGUI.DisabledScope(method == null))
+                using (new EditorGUI.DisabledScope(method == null || !statements.All(st => ticked.Contains(st.Id))))
                 {
                     if (GUILayout.Button("Pay " + quote.Amount, GUILayout.Width(170))) Send(0);
                 }
             }
+        }
+
+        /// <summary>Each statement as the forge words it (never this window's words), its own box, unticked until its user ticks it.</summary>
+        private void DrawStatements(List<PurchaseStatement> statements)
+        {
+            statementStyle ??= new GUIStyle(EditorStyles.toggle) { wordWrap = true };
+            EditorGUILayout.Space(4);
+            foreach (PurchaseStatement statement in statements)
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    bool was = ticked.Contains(statement.Id);
+                    bool now = GUILayout.Toggle(was, statement.Text, statementStyle);
+                    if (now != was)
+                    {
+                        if (now) ticked.Add(statement.Id);
+                        else ticked.Remove(statement.Id);
+                        confirmation = null;
+                    }
+                    if (!string.IsNullOrEmpty(statement.Url) && statement.Url.StartsWith("https://", StringComparison.Ordinal) && GUILayout.Button("Read", GUILayout.Width(50))) Application.OpenURL(statement.Url);
+                }
+            }
+            EditorGUILayout.Space(4);
         }
 
         private void DrawMethods()
@@ -210,7 +245,7 @@ namespace Glitchr.Store
 
         private async void Send(int retries)
         {
-            confirmation ??= PurchaseConfirmation.Of(quote, method);
+            confirmation ??= PurchaseConfirmation.Of(quote, method, ticked);
             busy = "Paying " + quote.Amount + "…";
             Repaint();
             PurchaseOutcome outcome;
@@ -274,6 +309,27 @@ namespace Glitchr.Store
                     showMethods = true;
                     Load("Save a payment method first (Payment methods, below).", MessageType.Warning);
                     return;
+                case PurchaseOutcome.Kind.ConsentChanged:
+                    quote.Consent = outcome.Consent;
+                    ticked.Clear();
+                    confirmation = null;
+                    note = "The statements to accept changed since you read them. Nothing was charged: read them again and tick each one to buy.";
+                    noteType = MessageType.Warning;
+                    break;
+                case PurchaseOutcome.Kind.ConsentRequired:
+                    confirmation = null;
+                    ticked.Clear();
+                    if (outcome.Unasked || outcome.Consent == null)
+                    {
+                        quote = null;
+                        note = (item.Origin?.HubName ?? "The forge") + " asks for statements before a purchase (its terms of sale, the right of withdrawal) that its confirmation did not give. Nothing was charged. Buy on its page instead" + (string.IsNullOrEmpty(item.Page) ? "." : ": " + item.Page);
+                        noteType = MessageType.Error;
+                        break;
+                    }
+                    quote.Consent = outcome.Consent;
+                    note = "Each statement must be ticked to buy. Nothing was charged.";
+                    noteType = MessageType.Warning;
+                    break;
                 case PurchaseOutcome.Kind.InProgress:
                     note = "Another purchase of yours is still running on the forge. Pay again in a moment: this confirmation is kept.";
                     noteType = MessageType.Warning;

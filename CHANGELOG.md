@@ -4,6 +4,40 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-11-14
+
+### Added
+
+- **The statements a Forge asks before a one-click purchase** (omnibase/forge
+  1.1: the terms of sale, immediate supply and the loss of the right of
+  withdrawal, L221-28 13°). The quote's `consent` is read (`PurchaseConsent`,
+  `PurchaseStatement`); the confirmation shows each statement in the Forge's
+  own words, each with its own box, none ticked, its link (terms of sale)
+  behind a Read button (https only); Pay stays disabled until every box is
+  ticked; the purchase sends `consent` with the version and language shown and
+  each statement `true`. A text that does not match its SHA-256 is not shown.
+- 409 `consent_changed`: the new texts shown, every box unticked, confirmed
+  again with a new key; 422 `consent_required`: the boxes shown again, or -
+  from a Forge whose quote gave no statements - a plain sentence (nothing
+  charged, buy on its page). `PurchaseOutcome.Kind.ConsentChanged`,
+  `ConsentRequired` (`Missing`, `Unasked`).
+- The quote is asked in the editor's language (`?locale=`:
+  `HubPurchases.EditorLanguage`, the editor's language read by reflection,
+  else the system's; `HubPurchases.Locale` normalises a tag such as `fr-FR` to
+  `fr_FR`).
+
+### Unchanged
+
+- A Forge whose quote has no `consent` (1.0) is bought from as in 1.7.0.
+  Nothing is remembered between purchases.
+
+### Tests
+
+- Four new EditMode tests against the fake Forge, now answering as forge 1.1
+  (texts per language, a version over ids and hashes, consent_required,
+  consent_changed): 88/88 in Unity 6000.3.28f1 batch mode with Forge Seal, 74 +
+  3 skipped without.
+
 ## [1.7.0] - 2026-11-14
 
 ### Added
