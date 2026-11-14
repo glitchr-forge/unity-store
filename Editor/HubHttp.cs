@@ -13,6 +13,30 @@ namespace Glitchr.Store
     /// </summary>
     public static class HubHttp
     {
+        /// <summary>What the one-click purchase sends through (<see cref="HubPurchases"/>): this class in the editor, canned answers in the tests.</summary>
+        public static readonly IHubRequests Requests = new UnityRequests();
+
+        private sealed class UnityRequests : IHubRequests
+        {
+            public Task<Answer> Send(string method, string url, object body, string bearer, System.Collections.Generic.IDictionary<string, string> headers, string certificate)
+            {
+                var request = new UnityWebRequest(url, method) { downloadHandler = new DownloadHandlerBuffer() };
+                if (body != null)
+                {
+                    request.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(global::Glitchr.Store.Json.Write(body)));
+                    request.SetRequestHeader("Content-Type", "application/json");
+                }
+                if (headers != null)
+                {
+                    foreach (var header in headers) request.SetRequestHeader(header.Key, header.Value);
+                }
+                // A forge's page to open is given in the answer, never followed here.
+                request.redirectLimit = 0;
+
+                return HubHttp.Send(request, bearer, certificate);
+            }
+        }
+
         public sealed class Answer
         {
             public long Status;

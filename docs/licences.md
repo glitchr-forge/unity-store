@@ -190,10 +190,12 @@ stores again on their next reading.
   "previous": "<base64>", "previousUntil": 1795564800}}
 ```
 
-## Buying stays as it is
+## Buying
 
-A Forge's **Buy** opens its device-flow page in the browser, and the shop's
-own checkout confirms the payment: a stray click never charges. There is no
-one-click purchase yet (it needs a saved payment method on the Forge). When
-there is one, its confirmation will show the offer's price and currency from
-the catalogue and the store's name before anything is charged.
+A Forge that takes one-click purchases (its manifest's `checkout.quote`,
+`purchases` and `methods`) is bought from in the window, once the editor is
+linked to it: **Buy** opens a confirmation with the price the Forge charges
+this user (taxes included), its currency, the store's name and the saved
+payment method, and **Pay** confirms it; a stray click never charges. Any
+other hub that sells keeps the device-flow page in the browser, where the
+shop's own checkout confirms the payment. See [buying.md](buying.md).

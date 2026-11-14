@@ -20,6 +20,8 @@ namespace Glitchr.Store
         public string Page;
         public string Price;
         public string Image;
+        /// <summary>A forge's offers for it (its catalogue's offers), for the one-click purchase.</summary>
+        public List<HubOffer> Offers = new List<HubOffer>();
 
         public HubOrigin Origin;
         /// <summary>A Git package: its URL, in place of a registry.</summary>
@@ -31,6 +33,56 @@ namespace Glitchr.Store
         public string DependenciesReference;
 
         public string Label => string.IsNullOrEmpty(DisplayName) ? Name : DisplayName;
+    }
+
+    /// <summary>An offer of a forge's catalogue (packages[].offers[]): its price is before VAT, the quote gives what is charged.</summary>
+    public sealed class HubOffer
+    {
+        public long Id;
+        public string Title;
+        public long? Price;
+        public string Currency;
+        public long? Seats;
+        public long? Months;
+
+        public static List<HubOffer> ListOf(List<object> offers)
+        {
+            var list = new List<HubOffer>();
+            foreach (object o in offers ?? new List<object>())
+            {
+                if (!(Json.Get(o, "id") is double id)) continue;
+                list.Add(new HubOffer
+                {
+                    Id = (long)id,
+                    Title = Json.String(Json.Get(o, "title")),
+                    Price = Json.Get(o, "price") is double p ? (long?)p : null,
+                    Currency = Json.String(Json.Get(o, "currency")),
+                    Seats = Json.Get(o, "seats") is double s ? (long?)s : null,
+                    Months = Json.Get(o, "months") is double m ? (long?)m : null,
+                });
+            }
+
+            return list;
+        }
+
+        public string Label => (Title ?? "Offer " + Id) + (Price.HasValue ? " · " + HubAmount.Format(Price.Value, Currency) : string.Empty);
+    }
+
+    /// <summary>An amount in minor units as people read it: "12.00 EUR", "1200 JPY".</summary>
+    public static class HubAmount
+    {
+        /// <summary>Currencies whose minor unit is the unit itself (ISO 4217 exponent 0).</summary>
+        private static readonly HashSet<string> ZeroDecimal = new HashSet<string> { "BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF" };
+
+        public static string Format(long minor, string currency)
+        {
+            currency = (currency ?? string.Empty).ToUpperInvariant();
+            if (ZeroDecimal.Contains(currency)) return (minor.ToString(CultureInfo.InvariantCulture) + " " + currency).TrimEnd();
+            string sign = minor < 0 ? "-" : string.Empty;
+            long abs = Math.Abs(minor);
+
+            return (sign + (abs / 100).ToString(CultureInfo.InvariantCulture) + "." + (abs % 100).ToString("00", CultureInfo.InvariantCulture) + " " + currency).TrimEnd();
+        }
     }
 
     public sealed class HubVersion
@@ -64,10 +116,27 @@ namespace Glitchr.Store
         public List<string> Scopes = new List<string>();
         public string DeviceUrl;
         public string TokenUrl;
+        /// <summary>The one-click purchase's addresses (checkout.quote, purchases, methods), when the forge takes it.</summary>
+        public string QuoteUrl;
+        public string PurchasesUrl;
+        public string MethodsUrl;
         public HubTheme Theme;
         /// <summary>The store whose key signs this item's licences (see <see cref="KeyPins"/>).</summary>
         public string Store;
         public bool Sells => !string.IsNullOrEmpty(DeviceUrl) && !string.IsNullOrEmpty(TokenUrl);
+
+        /// <summary>
+        /// The forge takes one-click purchases: a quote, purchases and payment methods on the host
+        /// the device flow links this editor with (the account token it gives is sent there only).
+        /// </summary>
+        public bool OneClick
+        {
+            get
+            {
+                string home = HubPurchases.Authority(TokenUrl);
+                return Sells && home != null && HubPurchases.Authority(QuoteUrl) == home && HubPurchases.Authority(PurchasesUrl) == home && HubPurchases.Authority(MethodsUrl) == home;
+            }
+        }
     }
 
     /// <summary>What every source offers, read the way it is published: a forge's catalogue, or a static registry's search and documents.</summary>
@@ -363,6 +432,9 @@ namespace Glitchr.Store
                 Registry = url.TrimEnd('/'), RegistryName = label,
                 Scopes = (Json.Array(Json.Get(entry, "scopes")) ?? new List<object>()).OfType<string>().ToList(),
                 DeviceUrl = device, TokenUrl = token, Theme = theme, Store = store,
+                QuoteUrl = Json.String(Json.Get(manifest, "checkout", "quote")),
+                PurchasesUrl = Json.String(Json.Get(manifest, "checkout", "purchases")),
+                MethodsUrl = Json.String(Json.Get(manifest, "checkout", "methods")),
             };
             string catalog = Json.String(Json.Get(entry, "catalog"));
             if (!string.IsNullOrEmpty(catalog)) catalogs.Add(catalog);
@@ -392,6 +464,7 @@ namespace Glitchr.Store
                         Page = Json.String(Json.Get(p, "page")),
                         Image = Json.String(Json.Get(p, "image")),
                         Price = Price(Json.Array(Json.Get(p, "offers"))),
+                        Offers = HubOffer.ListOf(Json.Array(Json.Get(p, "offers"))),
                         Origin = origin,
                     };
                     foreach (object v in Json.Array(Json.Get(p, "versions")) ?? new List<object>())
@@ -466,7 +539,7 @@ namespace Glitchr.Store
             object cheapest = offers.OrderBy(o => Json.Get(o, "price") is double d ? d : double.MaxValue).First();
             double cents = Json.Get(cheapest, "price") is double c ? c : 0;
 
-            return (cents / 100).ToString("0.00", CultureInfo.InvariantCulture) + " " + (Json.String(Json.Get(cheapest, "currency")) ?? string.Empty);
+            return HubAmount.Format((long)cents, Json.String(Json.Get(cheapest, "currency")));
         }
 
         /// <summary>Two Git URLs of the same repository, whatever their reference or folder.</summary>

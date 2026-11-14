@@ -11,6 +11,9 @@ namespace Glitchr.Store
     /// asked every few seconds until it hands over the user's licence key, which is kept as the
     /// registry's token in the user's .upmconfig.toml. The Package Manager reads that file when
     /// Unity starts: the window offers to restart the project.
+    /// A forge that takes one-click purchases also gives, once linked, the user's account token -
+    /// even to a user without a licence (then there is no key): kept by the system's secret store
+    /// for that forge (<see cref="AccountTokens"/>), it is what <see cref="HubPurchases"/> buys with.
     /// </summary>
     public static class HubCheckout
     {
@@ -21,8 +24,17 @@ namespace Glitchr.Store
             public HubItem Item;
         }
 
-        /// <summary>The user's code and page, opened in the browser (or by <paramref name="open"/>); then waits for the key (null: given up or expired).</summary>
-        public static async Task<string> Buy(HubItem item, Action<Pending> started, Func<bool> cancelled, Action<string> open = null)
+        /// <summary>What linking the editor gave.</summary>
+        public sealed class Linked
+        {
+            /// <summary>The user's licence key, kept in .upmconfig.toml; null when they hold no licence there.</summary>
+            public string Key;
+            /// <summary>An account token was given and kept: one-click purchases from this forge.</summary>
+            public bool Account;
+        }
+
+        /// <summary>The user's code and page, opened in the browser (or by <paramref name="open"/>); then waits until the editor is linked (null: given up or expired).</summary>
+        public static async Task<Linked> Buy(HubItem item, Action<Pending> started, Func<bool> cancelled, Action<string> open = null)
         {
             HubOrigin origin = item.Origin;
             string certificate = origin.Source.CertificateSha256;
@@ -43,12 +55,7 @@ namespace Glitchr.Store
                 HubHttp.Answer poll = await HubHttp.PostJson(origin.TokenUrl, new System.Collections.Generic.Dictionary<string, object> { ["device_code"] = device }, certificate);
                 if (poll.Ok)
                 {
-                    object granted = poll.Json;
-                    string key = Json.String(Json.Get(granted, "key"));
-                    string registry = Json.String(Json.Get(granted, "registry")) ?? origin.Registry;
-                    UpmConfig.SetToken(registry, key);
-
-                    return key;
+                    return Grant(poll.Json, origin);
                 }
                 string error = Json.String(Json.Get(poll.Json, "error"));
                 if (error == "slow_down") interval += 2;
@@ -58,8 +65,35 @@ namespace Glitchr.Store
             return null;
         }
 
+        /// <summary>
+        /// The forge's answer once the editor is linked: the licence key (when the user holds a
+        /// licence) kept for its registry in .upmconfig.toml, the account token (when the forge
+        /// gives one) kept for the forge by the system's secret store.
+        /// </summary>
+        public static Linked Grant(object granted, HubOrigin origin)
+        {
+            string key = Json.String(Json.Get(granted, "key"));
+            string account = Json.String(Json.Get(granted, "account_token"));
+            if (string.IsNullOrEmpty(key) && string.IsNullOrEmpty(account)) throw new Exception("The hub linked this editor but gave neither a key nor an account.");
+            var linked = new Linked();
+            if (!string.IsNullOrEmpty(key))
+            {
+                string registry = Json.String(Json.Get(granted, "registry")) ?? origin.Registry;
+                UpmConfig.SetToken(registry, key);
+                linked.Key = key;
+            }
+            string home = HubPurchases.Authority(origin.TokenUrl);
+            if (!string.IsNullOrEmpty(account) && home != null)
+            {
+                AccountTokens.Keep(home, account);
+                linked.Account = true;
+            }
+
+            return linked;
+        }
+
         /// <summary>Waits on the editor's loop (a Task.Delay continuation may not come back to it).</summary>
-        private static Task Delay(double seconds)
+        internal static Task Delay(double seconds)
         {
             var completion = new TaskCompletionSource<bool>();
             double until = EditorApplication.timeSinceStartup + seconds;

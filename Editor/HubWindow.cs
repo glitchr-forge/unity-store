@@ -47,6 +47,8 @@ namespace Glitchr.Store
         private bool busy;
         private string status;
         private HubCheckout.Pending pending;
+        /// <summary>The device flow only links this editor: the forge takes one-click purchases.</summary>
+        private bool linking;
         private bool cancelPurchase;
 
         private string newType = HubSource.Manifest;
@@ -213,7 +215,9 @@ namespace Glitchr.Store
 
             if (pending != null)
             {
-                EditorGUILayout.HelpBox("Buying " + pending.Item.Label + ": confirm the code " + pending.UserCode + " in your browser, buy, then link this editor. This window waits for the key.", MessageType.Info);
+                EditorGUILayout.HelpBox(linking
+                    ? "Linking this editor to " + pending.Item.Origin?.HubName + ": confirm the code " + pending.UserCode + " in your browser and link this editor. You then confirm the purchase of " + pending.Item.Label + " here."
+                    : "Buying " + pending.Item.Label + ": confirm the code " + pending.UserCode + " in your browser, buy, then link this editor. This window waits for the key.", MessageType.Info);
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     if (GUILayout.Button("Open the page again")) Application.OpenURL(pending.Link);
@@ -1243,30 +1247,76 @@ namespace Glitchr.Store
             Repaint();
         }
 
+        /// <summary>
+        /// Buy: a forge that takes one-click purchases, once this editor is linked to it, opens the
+        /// confirmation (<see cref="PurchaseWindow"/>). Otherwise the device flow - the forge's page
+        /// in the browser, where the user buys (or only links this editor, when the forge takes
+        /// one-click purchases: the confirmation follows here).
+        /// </summary>
         private async void Buy(HubItem item)
         {
             cancelPurchase = false;
+            bool oneClick = item.Origin != null && item.Origin.OneClick && item.Offers.Count > 0;
             try
             {
-                string key = await HubCheckout.Buy(item, started => { pending = started; Repaint(); }, () => cancelPurchase);
+                HubPurchases linkedAlready = oneClick ? HubPurchases.For(item.Origin) : null;
+                if (linkedAlready != null)
+                {
+                    PurchaseWindow.Open(item, linkedAlready, Bought);
+                    return;
+                }
+                HubCheckout.Linked linked = await HubCheckout.Buy(item, started => { pending = started; linking = oneClick; Repaint(); }, () => cancelPurchase);
                 pending = null;
-                if (key == null)
+                HubPurchases now = linked != null && linked.Account && oneClick ? HubPurchases.For(item.Origin) : null;
+                if (linked == null)
                 {
                     status = "The purchase was not completed.";
                 }
-                else if (EditorUtility.DisplayDialog("Key received", "Your licence key is kept for " + item.Origin.Registry + " in " + UpmConfig.FilePath + ". Unity's Package Manager reads it when Unity starts: restart this project now, then install " + item.Label + " from this window.", "Restart now", "Later"))
+                else if (linked.Key != null)
                 {
-                    HubCheckout.RestartProject();
+                    KeyReceived(item, item.Origin.Registry);
+                }
+                else if (now != null)
+                {
+                    status = "This editor is linked to " + item.Origin.HubName + ".";
+                    PurchaseWindow.Open(item, now, Bought);
                 }
                 else
                 {
-                    status = "Key kept. Restart Unity, then install " + item.Label + ".";
+                    status = "This editor is linked to " + item.Origin.HubName + ", and you hold no licence for " + item.Label + " there yet.";
                 }
             }
             catch (Exception e)
             {
                 pending = null;
                 status = e.Message;
+            }
+            Repaint();
+        }
+
+        /// <summary>Paid in one click: its key kept (once), or the licence already in the user's account.</summary>
+        private void Bought(HubItem item, PurchaseOutcome outcome)
+        {
+            if (outcome.KeyKept)
+            {
+                KeyReceived(item, outcome.Registry);
+            }
+            else
+            {
+                status = "Bought" + (outcome.Replayed ? " (already paid: nothing charged again)" : string.Empty) + ". Your licence key was handed over before; the licence is in your account on " + item.Origin?.HubName + ".";
+                Repaint();
+            }
+        }
+
+        private void KeyReceived(HubItem item, string registry)
+        {
+            if (EditorUtility.DisplayDialog("Key received", "Your licence key is kept for " + (registry ?? item.Origin.Registry) + " in " + UpmConfig.FilePath + ". Unity's Package Manager reads it when Unity starts: restart this project now, then install " + item.Label + " from this window.", "Restart now", "Later"))
+            {
+                HubCheckout.RestartProject();
+            }
+            else
+            {
+                status = "Key kept. Restart Unity, then install " + item.Label + ".";
             }
             Repaint();
         }

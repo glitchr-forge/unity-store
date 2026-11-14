@@ -4,6 +4,62 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-11-14
+
+### Added
+
+- **Buying in one click** from a Forge that takes it (its manifest's
+  `checkout.quote`, `purchases` and `methods`, on the host of
+  `checkout.token`; `HubOrigin.OneClick`). Once the editor is linked, Buy
+  opens a confirmation (`PurchaseWindow`): the price the Forge charges this
+  user (`GET quote?offer=<id>`, minor units, taxes included), its currency,
+  the store's name and the saved payment method; an Offer menu when the
+  package has several offers. **Pay** sends the purchase as shown with an
+  `Idempotency-Key` per confirmation, sent again on its retries, so nothing
+  is charged twice. A 409 `price_changed` shows the new price beside the old
+  one and asks again (a new key); `requires_action` (3-D Secure) opens the
+  bank's page in the browser and asks `GET purchases/<id>` every 3 seconds,
+  10 minutes at most; 402 shows the bank's reason; `payment_method_required`,
+  `purchase_in_progress` (sent again up to five times), `unknown_offer`,
+  `payments_unavailable`, `idempotency_key_reused` are said in a sentence.
+  Once paid, the licence key handed over (once) is kept for its registry in
+  `~/.upmconfig.toml` as the device flow keeps it. `HubPurchases`,
+  `PurchaseQuote`, `PurchaseConfirmation`, `PurchaseOutcome`.
+- **Payment methods** in the confirmation: listed (`GET methods`), added on
+  the payment provider's own page opened in the browser (`POST methods`),
+  removed (`DELETE methods/<id>`). Only `https` pages without a user name are
+  opened (`http` on this machine only, for a development Forge).
+- **The account token** the device flow now gives (`account_token`, even to a
+  user without a licence) is kept by the system's secret store per Forge
+  (`AccountTokens`: the macOS keychain, Windows' DPAPI, the Secret Service),
+  never in the project, sent as Bearer to that Forge's own addresses only; a
+  401 forgets it and Buy links the editor again.
+- `HubItem.Offers` (`HubOffer`: id, title, price, currency, seats, months),
+  read from a Forge's catalogue; `HubAmount.Format` (no minor unit for JPY,
+  KRW and the other zero-decimal currencies), now also used for the Buy
+  button's price.
+
+### Changed
+
+- The device flow no longer requires a licence key in the Forge's answer: a
+  user without a licence gets the account token only (`HubCheckout.Linked`,
+  `HubCheckout.Grant`); 1.6.0 wrote an empty token into `.upmconfig.toml`.
+  With a hub that takes one-click purchases, Buy only links the editor and the
+  confirmation follows in the window.
+- The GitHub token and the account tokens share one secret store
+  (`SecretStore`); the GitHub token's keychain item is unchanged.
+
+### Tests
+
+- Eight new EditMode tests against a Forge answering as omnibase/forge's
+  HubPurchaseController does (the price changed then paid once, the retry with
+  the same key, 3-D Secure then pending then paid, the key handed over once,
+  refusals, payment methods, an account token the Forge no longer knows, the
+  device flow without licence). 84/84 in Unity 6000.3.28f1 batch mode with
+  Forge Seal, 70 + 3 skipped without. The real UnityWebRequest path probed
+  against a local server: Bearer and Idempotency-Key sent, a 409 body read,
+  DELETE, a redirect not followed.
+
 ## [1.6.0] - 2026-11-13
 
 ### Added

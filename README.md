@@ -61,6 +61,11 @@ package hubs and installs their packages in the open project in one click:
   receives the licence key and keeps it as the registry's token in the user's
   `~/.upmconfig.toml` - never in the project. Unity's Package Manager reads
   that file when Unity starts: the window offers to restart the project.
+  A Forge that takes one-click purchases only needs the editor linked once:
+  then **Buy** opens a confirmation (the price this user pays, taxes
+  included, the store's name, the saved payment method) and **Pay** confirms
+  it; a changed price is shown and asked again, a bank's check opens in the
+  browser. Payment methods are saved on the payment provider's own page.
 - **A store's look.** A hub's theme gives the window its header: a banner
   (PNG or JPEG, cropped to the window's width at 6:1), a logo, a name and an
   accent for each skin. Images are fetched in the background, kept in the
@@ -136,7 +141,8 @@ folder (`Forge Store/github.json` under the local application data), and
 stops asking until the limit resets, showing what it already knows.
 
 See [docs/sources.md](docs/sources.md) for the hub manifest and the kinds of
-source, [docs/buying.md](docs/buying.md) for the device flow.
+source, [docs/buying.md](docs/buying.md) for the device flow and the one-click
+purchase.
 
 ## Tests
 
