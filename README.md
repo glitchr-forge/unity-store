@@ -100,7 +100,7 @@ From Git, in `Packages/manifest.json`:
 
 ```json
 "dependencies": {
-  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.8.0"
+  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.9.0"
 }
 ```
 
@@ -115,7 +115,7 @@ old one replaces it by a one-line change in `Packages/manifest.json`:
 
 ```diff
 -  "io.glitchr.hub": "...",
-+  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.8.0",
++  "io.glitchr.store": "https://github.com/glitchr-forge/unity-store.git#v1.9.0",
 ```
 
 When both are there, the window shows a notice with a button that removes
