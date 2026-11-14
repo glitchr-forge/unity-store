@@ -135,3 +135,27 @@ Since a Forge 1.1 (its paid purchases say `key_handed`, its manifest's
   know which editor holds which) and **Revoke** signs another one out. A
   Forge without `account_tokens`: the token is forgotten here only, and the
   window says the link stays on the account's page there.
+
+## After a restart
+
+A purchase whose key has not reached the editor is kept in
+`Forge Store/purchases.json` (the user's local application data, beside
+`keys.json`): the Forge's address, the item, the confirmation's key (the
+`Idempotency-Key`) and what it confirmed, and the purchase's id once the Forge
+gave it - never a licence key nor an account token. It is kept just before
+Pay sends the purchase and forgotten once its key is written, once the Forge
+says nothing was charged, or once it answers the purchase is not this
+account's (or its licence can make no key any more).
+
+After Unity restarts, the window says "An interrupted purchase" above the
+catalogue: **Check it** asks the Forge by the purchase's id, or - when its
+answer never came - sends the same confirmation again (the Forge answers the
+purchase it made, charging nothing more; one it never received is made now,
+as it was confirmed: the window asks first); **Get the key again** as above;
+**Forget** (nothing is cancelled on the Forge).
+
+`~/.upmconfig.toml` is written by Forge Store and Forge Hub alike: both take
+the same exclusive lock on `.upmconfig.toml.forge-lock` beside it (a POSIX
+record lock on macOS and Linux, LockFile on Windows) while they read, change
+and replace the file through a temporary file renamed over it, so neither
+loses the other's key.

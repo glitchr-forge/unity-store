@@ -173,6 +173,7 @@ namespace Glitchr.Store
 
         private async void Refresh()
         {
+            pendingPurchases = null;
             if (busy) return;
             busy = true;
             status = "Reading the sources…";
@@ -212,6 +213,7 @@ namespace Glitchr.Store
             DrawHeader();
             DrawFormerNames();
             DrawKeyChanges();
+            DrawPendingPurchases();
 
             if (pending != null)
             {
@@ -928,6 +930,78 @@ namespace Glitchr.Store
 
         private static string KeyOf(object hub) => Json.String(Json.Get(hub, "licensing", "publicKey"));
 
+        /// <summary>The purchases kept on disk whose outcome was not seen to the end (read again on Refresh and after each action).</summary>
+        private List<PendingPurchase> pendingPurchases;
+
+        /// <summary>Back from the confirmation window (or another app): the kept purchases read again.</summary>
+        private void OnFocus() => pendingPurchases = null;
+
+        private void ReadPending()
+        {
+            try { pendingPurchases = PendingPurchases.User.All(); }
+            catch (Exception e) { pendingPurchases = new List<PendingPurchase>(); status = "Forge Store/purchases.json: " + e.Message; }
+        }
+
+        /// <summary>
+        /// A purchase interrupted before its key was kept - in this session or before Unity was
+        /// restarted: checked on the forge (by its id, or by sending the same confirmation again),
+        /// its key asked again, or forgotten here.
+        /// </summary>
+        private void DrawPendingPurchases()
+        {
+            if (pendingPurchases == null) ReadPending();
+            foreach (PendingPurchase p in pendingPurchases.ToList())
+            {
+                HubItem item = (catalog?.Items ?? new List<HubItem>()).FirstOrDefault(i => i.Name == p.Item && i.Origin != null && i.Origin.OneClick && HubPurchases.Authority(i.Origin.TokenUrl) == p.Forge);
+                string label = item?.Label ?? p.Item;
+                EditorGUILayout.HelpBox("An interrupted purchase: " + label + " on " + (p.Hub ?? p.Forge) + ", confirmed " + DateTimeOffset.FromUnixTimeSeconds(p.Since).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                    + (p.Id != null ? ". The forge has it; its key did not reach this editor." : ". Its answer never came.") + (item == null ? " Its forge is not in the sources read now." : string.Empty), MessageType.Warning);
+                using (new EditorGUILayout.HorizontalScope())
+                using (new EditorGUI.DisabledScope(busy))
+                {
+                    HubPurchases purchases = item != null ? HubPurchases.For(item.Origin) : null;
+                    if (purchases != null && p.Id != null && GUILayout.Button("Get the key again")
+                        && EditorUtility.DisplayDialog("Get the key again", "A new key is made for your seat on this licence. The previous key of that seat stops working at once: another editor or a Composer configuration that uses it will need the new one.", "Make a new key", "Not now"))
+                    {
+                        ResolvePending(item, p, () => purchases.KeyAgainKept(p, PendingPurchases.User));
+                    }
+                    if (purchases != null && GUILayout.Button("Check it")
+                        && (p.Id != null || EditorUtility.DisplayDialog("Check the purchase", "The same confirmation is sent again: if the forge made the purchase, it is found and nothing is charged again; if it never got it, it is made now, as you confirmed it (" + HubAmount.Format(p.Price, p.Currency) + ").", "Send it again", "Not now")))
+                    {
+                        ResolvePending(item, p, () => purchases.Resume(p, PendingPurchases.User));
+                    }
+                    if (item != null && purchases == null) GUILayout.Label("Link this editor again (Buy) to check it.", EditorStyles.miniLabel);
+                    if (GUILayout.Button("Forget", GUILayout.Width(70)) && EditorUtility.DisplayDialog("Forget the purchase", "Forget it here? Nothing is cancelled on the forge.", "Forget", "Keep"))
+                    {
+                        PendingPurchases.User.Forget(p.Forge, p.Key);
+                        ReadPending();
+                    }
+                }
+            }
+        }
+
+        private async void ResolvePending(HubItem item, PendingPurchase p, Func<System.Threading.Tasks.Task<PurchaseOutcome>> ask)
+        {
+            busy = true;
+            try
+            {
+                PurchaseOutcome outcome = await ask();
+                if (outcome.What == PurchaseOutcome.Kind.Paid && outcome.KeyKept) Bought(item, outcome);
+                else if (outcome.What == PurchaseOutcome.Kind.Paid && outcome.KeyLost) status = item.Label + " is paid, and its key did not reach this editor: Get the key again.";
+                else if (outcome.What == PurchaseOutcome.Kind.Paid) status = item.Label + " is paid; its key was handed over before.";
+                else if (outcome.What == PurchaseOutcome.Kind.RequiresAction || outcome.What == PurchaseOutcome.Kind.Pending) status = item.Label + ": the payment is not settled yet (the bank or the provider). Check it again later.";
+                else if (outcome.What == PurchaseOutcome.Kind.InProgress) status = "Another purchase of yours is running on the forge: check it again in a moment.";
+                else status = item.Label + ": nothing was charged.";
+            }
+            catch (Exception e)
+            {
+                status = e.Message;
+            }
+            busy = false;
+            ReadPending();
+            Repaint();
+        }
+
         /// <summary>Each forge's links, once asked (Show linked editors): by the forge's address.</summary>
         private readonly Dictionary<string, List<LinkedToken>> links = new Dictionary<string, List<LinkedToken>>();
 
@@ -1375,6 +1449,7 @@ namespace Glitchr.Store
         /// <summary>Paid in one click: its key kept (once), or the licence already in the user's account.</summary>
         private void Bought(HubItem item, PurchaseOutcome outcome)
         {
+            pendingPurchases = null;
             if (outcome.KeyKept)
             {
                 KeyReceived(item, outcome.Registry);

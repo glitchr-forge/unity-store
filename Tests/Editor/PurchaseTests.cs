@@ -49,6 +49,8 @@ namespace Glitchr.Store.Tests
             public bool GapsClosed;
             public int Rekeyed;
             public bool SignedOut, OtherRevoked;
+            /// <summary>The next answer is lost on its way (the work done on the forge).</summary>
+            public bool DropNext;
 
             public Dictionary<string, object> Consent(string locale)
             {
@@ -89,7 +91,14 @@ namespace Glitchr.Store.Tests
                 string key = headers != null && headers.TryGetValue("Idempotency-Key", out string k) ? k : null;
                 Requests.Add(new Seen { Method = method, Url = url, Bearer = bearer, Key = key, Body = body });
 
-                return Task.FromResult(Route(method, url, body, bearer, key));
+                HubHttp.Answer answer = Route(method, url, body, bearer, key);
+                if (DropNext)
+                {
+                    DropNext = false;
+                    return Task.FromException<HubHttp.Answer>(new IOException("the connection closed"));
+                }
+
+                return Task.FromResult(answer);
             }
 
             private HubHttp.Answer Route(string method, string url, object body, string bearer, string key)
@@ -298,7 +307,7 @@ namespace Glitchr.Store.Tests
             Sync(purchases.KeyAgain(replay.Id));
             Assert.AreEqual("glk_again2", kept.Last().Key, "asked again: a newer key, kept in place of the other");
 
-            StringAssert.Contains("no such purchase", Assert.Throws<Exception>(() => Sync(purchases.KeyAgain(new string('f', 32)))).Message);
+            StringAssert.Contains("no such purchase", Assert.Throws<PurchaseGoneException>(() => Sync(purchases.KeyAgain(new string('f', 32)))).Message);
             Assert.Throws<ArgumentException>(() => Sync(purchases.KeyAgain("../x")), "never sent");
             forge.Statuses[new string('e', 32)] = new List<string> { "pending" };
             StringAssert.Contains("not paid yet", Assert.Throws<Exception>(() => Sync(purchases.KeyAgain(new string('e', 32)))).Message);
@@ -352,6 +361,85 @@ namespace Glitchr.Store.Tests
             Assert.IsFalse(Sync(new HubPurchases(Origin(), Token, older).SignOut()));
             Assert.IsNull(AccountTokens.Get(Forge));
             Assert.IsEmpty(older.Requests, "nothing asked of a forge 1.0");
+        }
+
+        [Test]
+        public void APurchaseWhoseAnswerWasLostIsFoundAgainAfterARestart()
+        {
+            var forge = new FakeForge { Methods = { Card("pm_1") }, GapsClosed = true };
+            HubPurchases purchases = Purchases(forge);
+            var pending = new PendingPurchases(Path.Combine(directory, "Forge Store", "purchases.json"));
+            PurchaseConfirmation sent = PurchaseConfirmation.Of(Sync(purchases.Quote(7)), "pm_1");
+            forge.DropNext = true;
+            Assert.Throws<IOException>(() => Sync(purchases.BuyKept(sent, pending, "com.example.tool")), "the paid answer never came");
+            Assert.AreEqual(1, forge.ByKey.Count, "paid on the forge");
+            PendingPurchase entry = pending.All().Single();
+            Assert.AreEqual("https://forge.example.test", entry.Forge);
+            Assert.AreEqual(sent.Key, entry.Key);
+            Assert.IsNull(entry.Id);
+            string onDisk = File.ReadAllText(pending.Path);
+            Assert.IsFalse(onDisk.Contains(Token) || onDisk.Contains("glk_"), "no token nor key on disk: " + onDisk);
+
+            // Unity starts again: a new store over the same file.
+            var restarted = new PendingPurchases(pending.Path);
+            entry = restarted.All().Single();
+            PurchaseOutcome found = Sync(purchases.Resume(entry, restarted));
+            Assert.IsTrue(found.What == PurchaseOutcome.Kind.Paid && found.KeyLost && found.Replayed);
+            Assert.AreEqual(1, forge.ByKey.Count, "one purchase");
+            entry = restarted.All().Single();
+            Assert.AreEqual(found.Id, entry.Id, "its id kept now");
+
+            PurchaseOutcome again = Sync(purchases.KeyAgainKept(entry, restarted));
+            Assert.IsTrue(again.KeyKept);
+            Assert.IsEmpty(restarted.All(), "forgotten once its key is written");
+        }
+
+        [Test]
+        public void APendingPurchaseIsForgottenWhenNothingWasChargedOrNothingIsToBeFound()
+        {
+            var forge = new FakeForge { Methods = { Card("pm_1") }, GapsClosed = true };
+            HubPurchases purchases = Purchases(forge);
+            var pending = new PendingPurchases(Path.Combine(directory, "purchases.json"));
+            PurchaseQuote quote = Sync(purchases.Quote(7));
+            forge.Price = 1450;
+            Assert.AreEqual(PurchaseOutcome.Kind.PriceChanged, Sync(purchases.BuyKept(PurchaseConfirmation.Of(quote, "pm_1"), pending, "com.example.tool")).What);
+            Assert.IsEmpty(pending.All(), "a new price: nothing charged, nothing kept");
+
+            var stranger = new PendingPurchase { Forge = "https://forge.example.test", Hub = "Atelier Exemple", Item = "com.example.tool", Key = HubPurchases.NewKey(), Offer = 7, Price = 1450, Currency = "EUR", Id = new string('d', 32) };
+            pending.Keep(stranger);
+            Assert.Throws<PurchaseGoneException>(() => Sync(purchases.Resume(stranger, pending)));
+            Assert.IsEmpty(pending.All(), "not this account's: forgotten");
+
+            pending.Keep(stranger);
+            forge.DropNext = true;
+            Assert.Throws<IOException>(() => Sync(purchases.Resume(stranger, pending)));
+            Assert.AreEqual(1, pending.All().Count, "an answer that did not come: kept for later");
+        }
+
+        [Test]
+        public void KeysWrittenAtOnceAreAllKeptUnderTheSharedLock()
+        {
+            // The editor's threads and Forge Hub take the same lock (<file>.forge-lock): every key kept.
+            var writers = Enumerable.Range(0, 8).Select(i => System.Threading.Tasks.Task.Run(() =>
+            {
+                for (int j = 0; j < 5; j++) UpmConfig.SetToken("https://forge" + i + ".example.com/upm" + j, "glk_" + i + "_" + j);
+            })).ToArray();
+            System.Threading.Tasks.Task.WaitAll(writers);
+            string text = File.ReadAllText(UpmConfig.FilePath);
+            for (int i = 0; i < 8; i++)
+            {
+                for (int j = 0; j < 5; j++) StringAssert.Contains("[npmAuth.\"https://forge" + i + ".example.com/upm" + j + "\"]\ntoken = \"glk_" + i + "_" + j + "\"", text);
+            }
+            Assert.IsTrue(File.Exists(UpmConfig.FilePath + ".forge-lock"), "the lock file Forge Hub takes");
+            Assert.IsEmpty(Directory.GetFiles(directory, "*.tmp"), "no temporary file left");
+
+            // While the lock is held, a writer waits for it.
+            var held = ForgeLock.Exclusive(UpmConfig.FilePath);
+            var later = System.Threading.Tasks.Task.Run(() => UpmConfig.SetToken("https://later.example.com/upm", "glk_later"));
+            Assert.IsFalse(later.Wait(300), "waits for the lock");
+            held.Dispose();
+            Assert.IsTrue(later.Wait(5000));
+            Assert.AreEqual("glk_later", UpmConfig.Token("https://later.example.com/upm"));
         }
 
         private string directory;
@@ -513,7 +601,7 @@ namespace Glitchr.Store.Tests
             Assert.IsTrue(paid.What == PurchaseOutcome.Kind.Paid && paid.KeyKept, "the first paid answer hands the key over");
             Assert.IsFalse(Sync(purchases.Status(action.Id)).KeyKept, "once");
             Assert.Throws<ArgumentException>(() => Sync(purchases.Status("not-an-id")), "never sent");
-            var unknown = Assert.Throws<Exception>(() => Sync(purchases.Status(new string('f', 32))));
+            var unknown = Assert.Throws<PurchaseGoneException>(() => Sync(purchases.Status(new string('f', 32))));
             StringAssert.Contains("no such purchase", unknown.Message);
         }
 

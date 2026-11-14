@@ -4,6 +4,38 @@ All notable changes to this package are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the package
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.9.1] - 2026-11-14
+
+### Fixed
+
+- A purchase whose answer was lost no longer depends on the editor staying
+  open: it is kept in `Forge Store/purchases.json` (the Forge, the item, the
+  confirmation's idempotency key and what it confirmed, the purchase's id once
+  given - no licence key, no account token) from just before Pay sends it,
+  and forgotten once its key is written, once the Forge says nothing was
+  charged, or once it answers the purchase is not this account's
+  (`PurchaseGoneException`: 404, or `license_unavailable`). After a restart
+  the window shows "An interrupted purchase": Check it (by its id, or the same
+  confirmation sent again, asked first), Get the key again, Forget.
+  `PendingPurchases`, `HubPurchases.BuyKept`, `Resume`, `KeyAgainKept`.
+- `UpmConfig.SetToken` takes the lock Forge Hub takes (`<file>.forge-lock`:
+  `FileStream.Lock`, a POSIX record lock under Mono, LockFile on Windows; the
+  editor's threads take turns first) and replaces the file through a renamed
+  temporary file, so Forge Store and Forge Hub never lose each other's keys
+  (`ForgeLock`). The file's own permissions are not carried over on macOS and
+  Linux (no API for it here): a new file gets the user's default.
+
+### Tests
+
+- Three new EditMode tests: a lost answer found again by a new store over
+  the same file, its key made again and the entry forgotten; entries
+  forgotten on a new price or a purchase not this account's, kept on a lost
+  answer; 8 writers at once all kept, and a writer waiting while the lock is
+  held. 94/94 in Unity 6000.3.28f1 batch mode with Forge Seal, 80 + 3 skipped
+  without. Probed across processes in batch mode: Forge Store's lock and a
+  POSIX fcntl lock (Forge Hub's kind) wait for each other, both ways (about
+  2 s each for a 2 s hold).
+
 ## [1.9.0] - 2026-11-14
 
 ### Added

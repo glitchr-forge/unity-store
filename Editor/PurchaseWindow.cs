@@ -265,7 +265,7 @@ namespace Glitchr.Store
             PurchaseOutcome outcome;
             try
             {
-                outcome = await purchases.Buy(confirmation);
+                outcome = await purchases.BuyKept(confirmation, PendingPurchases.User, item.Name);
             }
             catch (Exception e)
             {
@@ -292,7 +292,14 @@ namespace Glitchr.Store
             Repaint();
             try
             {
-                PurchaseOutcome again = await purchases.KeyAgain(lost.Id);
+                PurchaseOutcome again;
+                try { again = await purchases.KeyAgain(lost.Id); }
+                catch (Exception e)
+                {
+                    PendingPurchases.User.SettleById(lost.Id, null, e);
+                    throw;
+                }
+                PendingPurchases.User.SettleById(lost.Id, again, null);
                 busy = null;
                 if (again.KeyKept)
                 {
@@ -401,9 +408,14 @@ namespace Glitchr.Store
                 await HubCheckout.Delay(3);
                 if (closed || round != waitRound) return;
                 PurchaseOutcome outcome;
-                try { outcome = await purchases.Status(id); }
+                try
+                {
+                    outcome = await purchases.Status(id);
+                    PendingPurchases.User.SettleById(id, outcome, null);
+                }
                 catch (Exception e)
                 {
+                    PendingPurchases.User.SettleById(id, null, e);
                     note = e.Message;
                     noteType = MessageType.Error;
                     continue;

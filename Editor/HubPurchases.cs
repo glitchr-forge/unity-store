@@ -407,6 +407,7 @@ namespace Glitchr.Store
         {
             if (id == null || !PurchaseShape.IsMatch(id)) throw new ArgumentException("Not a purchase's id.");
             HubHttp.Answer answer = await Send("GET", origin.PurchasesUrl.TrimEnd('/') + "/" + id);
+            if (answer.Status == 404) throw new PurchaseGoneException("The forge knows no such purchase of your account.");
 
             return Outcome(answer, false, true);
         }
@@ -420,12 +421,13 @@ namespace Glitchr.Store
         {
             if (id == null || !PurchaseShape.IsMatch(id)) throw new ArgumentException("Not a purchase's id.");
             HubHttp.Answer answer = await Send("POST", origin.PurchasesUrl.TrimEnd('/') + "/" + id + "/key");
+            if (answer.Status == 404) throw new PurchaseGoneException("The forge knows no such purchase of your account.");
             if (answer.Status == 409)
             {
                 switch (Json.String(Json.Get(Parse(answer), "error")))
                 {
                     case "purchase_not_paid": throw new Exception("This purchase is not paid yet: its key comes with it once it is.");
-                    case "license_unavailable": throw new Exception("Its licence is no longer valid (expired, refunded or revoked), or you hold no seat on it any more: no key made.");
+                    case "license_unavailable": throw new PurchaseGoneException("Its licence is no longer valid (expired, refunded or revoked), or you hold no seat on it any more: no key made.");
                     case "purchase_in_progress": throw new Exception("Another purchase of yours is running on the forge: try again in a moment.");
                     default: throw new Exception("The forge refused to make a new key.");
                 }
@@ -433,6 +435,52 @@ namespace Glitchr.Store
             if (!answer.Ok) throw Refusal(answer);
 
             return Outcome(answer, false, true);
+        }
+
+        /// <summary><see cref="Buy"/>, the confirmation kept on disk first and its fate written after: a lost answer is found again after a restart.</summary>
+        public async Task<PurchaseOutcome> BuyKept(PurchaseConfirmation confirmed, PendingPurchases pending, string item)
+        {
+            string forge = Authority(origin.TokenUrl) ?? throw new Exception("No forge address.");
+            pending.Keep(new PendingPurchase { Forge = forge, Hub = origin.HubName, Item = item, Key = confirmed.Key, Offer = confirmed.Offer, Price = confirmed.Price, Currency = confirmed.Currency, Since = DateTimeOffset.UtcNow.ToUnixTimeSeconds() });
+            return await Settled(() => Buy(confirmed), outcome => pending.Settle(forge, confirmed.Key, outcome, null), error => pending.Settle(forge, confirmed.Key, null, error));
+        }
+
+        /// <summary>
+        /// Where a kept purchase stands after a restart: by its id when the forge gave it, else by
+        /// sending the same confirmation again (the forge answers the purchase it made, with its id,
+        /// charging nothing more; one it never received is made now, as it was confirmed - the
+        /// window says so before).
+        /// </summary>
+        public Task<PurchaseOutcome> Resume(PendingPurchase kept, PendingPurchases pending)
+        {
+            Func<Task<PurchaseOutcome>> ask = kept.Id != null
+                ? () => Status(kept.Id)
+                : () => Buy(new PurchaseConfirmation { Offer = kept.Offer, Price = kept.Price, Currency = kept.Currency, Key = kept.Key });
+            return Settled(ask, outcome => pending.Settle(kept.Forge, kept.Key, outcome, null), error => pending.Settle(kept.Forge, kept.Key, null, error));
+        }
+
+        /// <summary><see cref="KeyAgain"/> for a kept purchase: forgotten once its key is written, or when the forge says there is nothing to find.</summary>
+        public Task<PurchaseOutcome> KeyAgainKept(PendingPurchase kept, PendingPurchases pending)
+        {
+            if (kept.Id == null) throw new Exception("The forge has not given this purchase's id yet: check it first.");
+            return Settled(() => KeyAgain(kept.Id), outcome => pending.Settle(kept.Forge, kept.Key, outcome, null), error => pending.Settle(kept.Forge, kept.Key, null, error));
+        }
+
+        private static async Task<PurchaseOutcome> Settled(Func<Task<PurchaseOutcome>> ask, Action<PurchaseOutcome> answered, Action<Exception> failed)
+        {
+            PurchaseOutcome outcome;
+            try
+            {
+                outcome = await ask();
+            }
+            catch (Exception e)
+            {
+                failed(e);
+                throw;
+            }
+            answered(outcome);
+
+            return outcome;
         }
 
         /// <summary>The account's links (account tokens), newest first; Current: this editor's. Forge 1.1 (checkout.account_tokens).</summary>
